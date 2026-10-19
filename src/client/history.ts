@@ -39,6 +39,7 @@ export class HistoryPlayer<V, Cursor = unknown> {
   private loadedAll = false;
   private loading: Promise<void> | null = null;
   private loadTarget = 0;
+  private generation = 0; // bumped by reset, so in-flight loads are dropped
 
   private speed: number;
   private running = false;
@@ -62,6 +63,25 @@ export class HistoryPlayer<V, Cursor = unknown> {
   pause() {
     this.tick();
     this.running = false;
+  }
+
+  /**
+   * Forget everything loaded and go back to position 0, paused. The speed is
+   * kept. Call `play` to replay, loading again from the start, so batches
+   * written since the last load are included.
+   */
+  reset() {
+    this.generation++;
+    this.items = [];
+    this.nextItem = 0;
+    this.origin = undefined;
+    this.cursor = undefined;
+    this.loadedAll = false;
+    this.loading = null;
+    this.loadTarget = 0;
+    this.running = false;
+    this.positionMs = 0;
+    this.lastValues = new Map();
   }
 
   setSpeed(speed: number) {
@@ -135,19 +155,32 @@ export class HistoryPlayer<V, Cursor = unknown> {
   // running raise its target instead of starting a second one.
   private ensureLoaded(untilMs: number): Promise<void> {
     this.loadTarget = Math.max(this.loadTarget, untilMs);
-    this.loading ??= (async () => {
-      while (!this.loadedAll && this.loadedMs() < this.loadTarget) {
-        await this.loadPage();
-      }
-    })().finally(() => {
-      this.loading = null;
-      this.loadTarget = 0;
-    });
+    if (!this.loading) {
+      const generation = this.generation;
+      const loading: Promise<void> = (async () => {
+        while (
+          generation === this.generation &&
+          !this.loadedAll &&
+          this.loadedMs() < this.loadTarget
+        ) {
+          await this.loadPage();
+        }
+      })().finally(() => {
+        // A reset may have replaced this load with a newer one.
+        if (this.loading === loading) {
+          this.loading = null;
+          this.loadTarget = 0;
+        }
+      });
+      this.loading = loading;
+    }
     return this.loading;
   }
 
   private async loadPage() {
+    const generation = this.generation;
     const page = await this.load(this.cursor);
+    if (generation !== this.generation) return; // reset while loading
     this.cursor = page.next ?? undefined;
     if (page.next === null) this.loadedAll = true;
     this.origin ??= page.batches[0]?.start;

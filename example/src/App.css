@@ -31,3 +31,53 @@
   background: none;
   border: 2px solid #fff;
 }
+.demo-nav {
+  position: fixed;
+  top: 12px;
+  right: 12px;
+  display: flex;
+  gap: 12px;
+  padding: 8px 14px;
+  background: #000a;
+  border-radius: 8px;
+  font-size: 14px;
+  z-index: 2;
+}
+.demo-nav a {
+  color: #aaa;
+  text-decoration: none;
+}
+.demo-nav a[aria-current="true"] {
+  color: #fff;
+  font-weight: 600;
+}
+.board-wrap {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+}
+.board {
+  width: min(100vw, calc(100vh * 16 / 9));
+  aspect-ratio: 16 / 9;
+  background: #1c1c22;
+  touch-action: none;
+  cursor: crosshair;
+}
+.hud button {
+  margin: 4px 4px 0 0;
+  padding: 4px 10px;
+  font: inherit;
+  color: inherit;
+  background: #fff2;
+  border: 1px solid #fff4;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.hud button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.hud button[aria-pressed="true"] {
+  background: #fff5;
+}

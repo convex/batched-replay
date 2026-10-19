@@ -9,6 +9,7 @@
  */
 
 import type * as cursors from "../cursors.js";
+import type * as drawing from "../drawing.js";
 
 import type {
   ApiFromModules,
@@ -18,6 +19,7 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   cursors: typeof cursors;
+  drawing: typeof drawing;
 }>;
 
 /**

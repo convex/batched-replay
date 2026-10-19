@@ -115,4 +115,73 @@ describe("HistoryPlayer", () => {
     player.tick();
     expect(player.isFinished()).toBe(true);
   });
+
+  test("reset goes back to the start and picks up batches written since", async () => {
+    const pages = [page1, page2];
+    const { player, played, loads, flush, advance } = setup(pages);
+    player.play();
+    await flush();
+    advance(5_000);
+    player.tick();
+    expect(player.isFinished()).toBe(true);
+    expect(played.map((p) => p[1])).toEqual([1, 10, 2, 3]);
+
+    // Someone draws more after everything was loaded.
+    pages[1] = [
+      ...page2,
+      { stream: "b", start: 3_000, samples: [{ t: 0, v: 4 }] },
+    ];
+    player.reset();
+    expect(player.position()).toBe(0);
+    expect(player.isPlaying()).toBe(false);
+    expect(player.isFinished()).toBe(false);
+    expect(player.values().size).toBe(0);
+    played.length = 0;
+    loads.length = 0;
+
+    player.play();
+    await flush();
+    advance(5_000);
+    player.tick();
+    expect(loads).toEqual([undefined, 1]); // from the first page again
+    expect(played.map((p) => p[1])).toEqual([1, 10, 2, 3, 4]);
+    expect(player.isFinished()).toBe(true);
+  });
+
+  test("reset keeps the speed", async () => {
+    const { player, flush, advance } = setup([page1, page2]);
+    player.setSpeed(10);
+    player.reset();
+    player.play();
+    await flush();
+    advance(100);
+    player.tick();
+    expect(player.position()).toBe(1_000);
+  });
+
+  test("a page that arrives after reset is dropped", async () => {
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => (release = r));
+    let first = true;
+    const played: number[] = [];
+    const player = new HistoryPlayer<number, Cursor>({
+      speed: Infinity,
+      load: async () => {
+        if (first) {
+          first = false;
+          await gate; // the old load is slow
+          return { batches: page1, next: null };
+        }
+        return { batches: page2, next: null };
+      },
+      onSample: (_s, v) => played.push(v),
+    });
+    player.play();
+    player.reset();
+    player.play();
+    release();
+    await new Promise((r) => setTimeout(r, 0));
+    player.tick();
+    expect(played).toEqual([3]); // only the page loaded after reset
+  });
 });

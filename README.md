@@ -66,6 +66,7 @@ const { values, stats } = usePlayback(api.cursors, {
 // Replay stored batches later, at any speed (Infinity = as fast as it loads).
 const replay = useHistory(api.cursors, { room, speed: 10, onSample: draw });
 replay.play(); // also pause(), seek(ms), setSpeed(n)
+replay.restart(); // reload from the start, picking up new batches, and play
 ```
 
 The `Sender`, `Player` and `HistoryPlayer` classes behind the hooks are plain
@@ -73,8 +74,10 @@ TypeScript, exported from `@convex-dev/batched-replay`, if you're not using Reac
 
 ## Example
 
-`example/` is a cursors demo: open it in two tabs and move the mouse. A slider
-sets `flushMs` so you can compare smooth-but-behind with jumpy-and-expensive.
+`example/` has two demos, switched by `#cursors` and `#drawing`. Cursors: open it
+in two tabs and move the mouse; a slider sets `flushMs` so you can compare
+smooth-but-behind with jumpy-and-expensive. Drawing: a shared board where
+everyone else's strokes replay at the speed they were drawn, with a timelapse.
 
 ```sh
 npm run dev

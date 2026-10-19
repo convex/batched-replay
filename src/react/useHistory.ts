@@ -80,6 +80,12 @@ export function useHistory<V>(
       player.play();
       render();
     }, [player]),
+    /** Reload everything from the start (picking up new batches) and play. */
+    restart: useCallback(() => {
+      player.reset();
+      player.play();
+      render();
+    }, [player]),
     pause: useCallback(() => {
       player.pause();
       render();
