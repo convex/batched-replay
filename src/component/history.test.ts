@@ -1,8 +1,11 @@
 /// <reference types="vite/client" />
 
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { convexTest } from "convex-test";
 import { api, internal } from "./_generated/api.js";
-import { initConvexTest } from "./setup.test.js";
+import schema from "./schema.js";
+import { CHUNK } from "./shared.js";
+import { initConvexTest, modules } from "./setup.test.js";
 
 const T0 = 1_000_000;
 type Cursor = { start: number; creationTime: number; seq: number };
@@ -89,6 +92,40 @@ describe("batches.history", () => {
   });
 });
 
+describe("streams.list", () => {
+  test("returns the most recently active streams first, 100 by default", async () => {
+    const t = initConvexTest();
+    await t.run(async (ctx) => {
+      for (let i = 0; i < 150; i++) {
+        await ctx.db.insert("streams", {
+          room: "r",
+          stream: `s${i}`,
+          firstStart: T0,
+          lastEnd: T0 + i,
+        });
+      }
+    });
+    const { streams } = await t.query(api.streams.list, { room: "r" });
+    expect(streams).toHaveLength(100);
+    // The newest visitor is never cut off, however many came before.
+    expect(streams[0].stream).toBe("s149");
+    expect(streams[99].stream).toBe("s50");
+    const few = await t.query(api.streams.list, { room: "r", limit: 2 });
+    expect(few.streams.map((s) => s.stream)).toEqual(["s149", "s148"]);
+  });
+
+  test("the epoch starts at 0 and goes up once per clear", async () => {
+    const t = initConvexTest();
+    await append(t, "a");
+    expect((await t.query(api.streams.list, { room: "r" })).epoch).toBe(0);
+    await t.mutation(api.streams.clear, { room: "r" });
+    expect((await t.query(api.streams.list, { room: "r" })).epoch).toBe(1);
+    await t.mutation(api.streams.clear, { room: "r", stream: "a" });
+    expect((await t.query(api.streams.list, { room: "r" })).epoch).toBe(2);
+    expect((await t.query(api.streams.list, { room: "x" })).epoch).toBe(0);
+  });
+});
+
 describe("cleanup", () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -98,22 +135,26 @@ describe("cleanup", () => {
     vi.useRealTimers();
   });
 
+  const count = (t: ReturnType<typeof initConvexTest>) =>
+    t.run(async (ctx) => (await ctx.db.query("batches").collect()).length);
+
   test("the cron deletes expired batches and idle stream docs", async () => {
     const t = initConvexTest();
     await append(t, "short", 1_000);
     await append(t, "forever");
     vi.setSystemTime(T0 + 2_000);
     await t.mutation(internal.crons.deleteExpired, {});
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
     const left = await t.run((ctx) => ctx.db.query("batches").collect());
     expect(left.map((b) => b.stream)).toEqual(["forever"]);
-    const streams = await t.query(api.streams.list, { room: "r" });
+    const { streams } = await t.query(api.streams.list, { room: "r" });
     expect(streams.map((s) => s.stream)).toEqual(["forever"]);
   });
 
   test("the cron works through large backlogs in chunks", async () => {
     const t = initConvexTest();
     await t.run(async (ctx) => {
-      for (let i = 0; i < 450; i++) {
+      for (let i = 0; i < 250; i++) {
         await ctx.db.insert("batches", {
           room: "r",
           stream: "x",
@@ -127,13 +168,9 @@ describe("cleanup", () => {
     });
     vi.setSystemTime(T0 + 10);
     await t.mutation(internal.crons.deleteExpired, {});
-    expect(
-      await t.run((ctx) => ctx.db.query("batches").collect()),
-    ).toHaveLength(250);
+    expect(await count(t)).toBe(250 - CHUNK);
     await t.finishAllScheduledFunctions(vi.runAllTimers);
-    expect(
-      await t.run((ctx) => ctx.db.query("batches").collect()),
-    ).toHaveLength(0);
+    expect(await count(t)).toBe(0);
   });
 
   test("clear removes one stream, or a whole room, in chunks", async () => {
@@ -141,12 +178,11 @@ describe("cleanup", () => {
     await append(t, "a");
     await append(t, "b");
     await t.mutation(api.streams.clear, { room: "r", stream: "a" });
-    expect(
-      (await t.query(api.streams.list, { room: "r" })).map((s) => s.stream),
-    ).toEqual(["b"]);
+    const { streams } = await t.query(api.streams.list, { room: "r" });
+    expect(streams.map((s) => s.stream)).toEqual(["b"]);
 
     await t.run(async (ctx) => {
-      for (let i = 0; i < 450; i++) {
+      for (let i = 0; i < 250; i++) {
         await ctx.db.insert("batches", {
           room: "r",
           stream: "b",
@@ -158,13 +194,66 @@ describe("cleanup", () => {
       }
     });
     await t.mutation(api.streams.clear, { room: "r" });
-    expect(
-      await t.run((ctx) => ctx.db.query("batches").collect()),
-    ).toHaveLength(251);
+    expect(await count(t)).toBe(251 - CHUNK);
     await t.finishAllScheduledFunctions(vi.runAllTimers);
-    expect(
-      await t.run((ctx) => ctx.db.query("batches").collect()),
-    ).toHaveLength(0);
-    expect(await t.query(api.streams.list, { room: "r" })).toEqual([]);
+    expect(await count(t)).toBe(0);
+    expect(await t.query(api.streams.list, { room: "r" })).toEqual({
+      epoch: 2,
+      streams: [],
+    });
+  });
+
+  describe("with batches near the 1 MiB document limit", () => {
+    // Enforces Convex's real limits, including 16 MiB read per transaction.
+    const initStrict = () =>
+      convexTest({ schema, modules, transactionLimits: true });
+    const big = "x".repeat(900_000);
+
+    async function insertBig(
+      t: ReturnType<typeof initStrict>,
+      expiresAt?: number,
+    ) {
+      // 30 batches, about 27 MB, written a few at a time.
+      for (let i = 0; i < 30; i += 5) {
+        await t.run(async (ctx) => {
+          for (let j = i; j < i + 5; j++) {
+            await ctx.db.insert("batches", {
+              room: "r",
+              stream: `s${j % 3}`,
+              seq: j,
+              start: T0,
+              end: T0,
+              samples: [{ t: 0, v: big }],
+              expiresAt,
+            });
+          }
+        });
+      }
+    }
+
+    test("clear stays under the read limit", async () => {
+      const t = initStrict();
+      await insertBig(t);
+      await t.mutation(api.streams.clear, { room: "r" });
+      await t.finishAllScheduledFunctions(vi.runAllTimers);
+      expect(
+        await t.run(
+          async (ctx) => (await ctx.db.query("batches").take(1)).length,
+        ),
+      ).toBe(0);
+    });
+
+    test("the expiry cron stays under the read limit", async () => {
+      const t = initStrict();
+      await insertBig(t, T0 + 1);
+      vi.setSystemTime(T0 + 10);
+      await t.mutation(internal.crons.deleteExpired, {});
+      await t.finishAllScheduledFunctions(vi.runAllTimers);
+      expect(
+        await t.run(
+          async (ctx) => (await ctx.db.query("batches").take(1)).length,
+        ),
+      ).toBe(0);
+    });
   });
 });

@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useReducer, useRef } from "react";
-import { useQueries, useQuery } from "convex/react";
+import { useEffect, useMemo, useReducer, useRef, useState } from "react";
+import { useConvex, useQueries, useQuery } from "convex/react";
 import { getFunctionName, type FunctionReference } from "convex/server";
 import {
   Player,
@@ -7,6 +7,8 @@ import {
   type PlayerBatch,
   type PlayerStats,
 } from "../client/player.js";
+
+type Cursor = { start: number; creationTime: number; seq: number };
 
 type PlaybackApi<V> = {
   latest: FunctionReference<
@@ -18,23 +20,65 @@ type PlaybackApi<V> = {
   streams: FunctionReference<
     "query",
     "public",
-    { room: string },
-    { stream: string; firstStart: number; lastEnd: number }[]
+    { room: string; limit?: number },
+    {
+      epoch: number;
+      streams: { stream: string; firstStart: number; lastEnd: number }[];
+    }
+  >;
+  /** Needed for `fromStart`, and to fill gaps when batches are missed. */
+  history?: FunctionReference<
+    "query",
+    "public",
+    { room: string; stream?: string; after?: Cursor; limit?: number },
+    { batches: (PlayerBatch<V> & { stream: string })[]; next: Cursor | null }
   >;
 };
 
 export type PlaybackOptions<V> = {
   room: string;
   /** Your own stream key: you draw your own input locally, with no delay. */
-  exclude?: string;
+  self?: string;
+  /**
+   * Replay the room's whole history through onSample first, instantly and in
+   * order, then carry on live with no gap and nothing twice.
+   */
+  fromStart?: boolean;
   delayMs?: number;
+  maxDelayMs?: number;
   interpolate?: Interpolate<V>;
   onSample?: (stream: string, value: V, time: number) => void;
+  /**
+   * Called when the room is cleared. Everything buffered is dropped, and with
+   * fromStart the (now empty) history is replayed again.
+   */
+  onReset?: () => void;
 };
 
 // A stream counts as active if it wrote this recently.
 const ACTIVE_MS = 60_000;
 const ACTIVE_RECHECK_MS = 5_000;
+const RETRY_HISTORY_MS = 2_000;
+
+/**
+ * The streams that wrote in the last minute, apart from your own. lastEnd is
+ * server time, so it's compared with the server's clock once we know it, and
+ * until then with the newest stream's lastEnd, never the local clock (which
+ * may be off by minutes).
+ */
+export function activeStreams(
+  streams: { stream: string; lastEnd: number }[],
+  options: { self?: string; now: number; clockOffset: number | undefined },
+): string[] {
+  const { self, now, clockOffset } = options;
+  const serverNow =
+    clockOffset !== undefined
+      ? now + clockOffset
+      : Math.max(...streams.map((s) => s.lastEnd));
+  return streams
+    .filter((s) => s.stream !== self && s.lastEnd > serverNow - ACTIVE_MS)
+    .map((s) => s.stream);
+}
 
 /**
  * Subscribes to a room's active streams and plays them back slightly behind
@@ -44,23 +88,95 @@ export function usePlayback<V>(
   api: PlaybackApi<V>,
   options: PlaybackOptions<V>,
 ): { values: Map<string, V>; stats: PlayerStats } {
-  const { room, exclude, delayMs, interpolate } = options;
+  const { room, self, delayMs, maxDelayMs, interpolate } = options;
+  const fromStart = options.fromStart ?? false;
+  const convex = useConvex();
   const onSampleRef = useRef(options.onSample);
+  const onResetRef = useRef(options.onReset);
   useEffect(() => {
     onSampleRef.current = options.onSample;
+    onResetRef.current = options.onReset;
   });
+  // `api.x.y` is a new object on every render, so hooks below key on the
+  // function's name and read the latest reference from here.
+  const apiRef = useRef(api);
+  apiRef.current = api;
+  const historyName = api.history && getFunctionName(api.history);
+  if (fromStart && !historyName) {
+    throw new Error("usePlayback: fromStart needs `history` in the api");
+  }
 
   const player = useMemo(
     () =>
       new Player<V>({
+        fromStart,
         onSample: (stream, value, time) =>
           onSampleRef.current?.(stream, value, time),
+        // Fills gaps from the stream's history when batches were missed.
+        fetchAfter: historyName
+          ? async (stream, seq) => {
+              const page = await convex.query(apiRef.current.history!, {
+                room,
+                stream,
+                // One stream pages by seq alone.
+                after: { seq, start: 0, creationTime: 0 },
+                limit: 50,
+              });
+              return page.batches;
+            }
+          : undefined,
       }),
     // A new room gets a fresh player, so `room` is a dependency on purpose.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [room],
+    [convex, room, fromStart, historyName],
   );
-  player.configure({ delayMs, interpolate });
+  player.configure({ delayMs, maxDelayMs, interpolate });
+
+  const list = useQuery(api.streams, { room });
+  const epoch = list?.epoch;
+
+  // A new epoch means the room was cleared: drop everything and start again.
+  const lastEpoch = useRef<{ player: Player<V>; epoch: number }>(undefined);
+  useEffect(() => {
+    if (epoch === undefined) return;
+    const last = lastEpoch.current;
+    if (last?.player === player && last.epoch !== epoch) {
+      player.reset();
+      onResetRef.current?.();
+    }
+    lastEpoch.current = { player, epoch };
+  }, [player, epoch]);
+
+  // With fromStart, replay the stored history before going live.
+  const [historyDone, setHistoryDone] = useState<{
+    player: Player<V>;
+    epoch: number;
+  }>();
+  useEffect(() => {
+    if (!fromStart || epoch === undefined) return;
+    let stopped = false;
+    let retry: ReturnType<typeof setTimeout> | undefined;
+    const load = () =>
+      player
+        .loadHistory((after: Cursor | undefined) =>
+          convex.query(apiRef.current.history!, { room, after, limit: 200 }),
+        )
+        .then(
+          (done) => {
+            if (done && !stopped) setHistoryDone({ player, epoch });
+          },
+          () => {
+            if (!stopped) retry = setTimeout(load, RETRY_HISTORY_MS);
+          },
+        );
+    void load();
+    return () => {
+      stopped = true;
+      clearTimeout(retry);
+    };
+  }, [fromStart, player, epoch, convex, room]);
+  const live =
+    !fromStart ||
+    (historyDone?.player === player && historyDone.epoch === epoch);
 
   const [, render] = useReducer((n: number) => n + 1, 0);
   // The stream list only changes every few seconds, so re-check which
@@ -71,43 +187,38 @@ export function usePlayback<V>(
     return () => clearInterval(id);
   }, []);
 
-  const list = useQuery(api.streams, { room });
-  const active = useMemo(
-    () =>
-      (list ?? [])
-        // lastEnd is server time, so compare it with the server's clock.
-        .filter(
-          (s) =>
-            s.stream !== exclude &&
-            s.lastEnd > now + (player.clockOffset() ?? 0) - ACTIVE_MS,
-        )
-        .map((s) => s.stream),
-    [list, exclude, now, player],
-  );
-  // `api.x.latest` is a new object on every render, so key the memo on its
-  // name. useQueries needs a stable object or it resubscribes every render.
-  const latestRef = useRef(api.latest);
-  latestRef.current = api.latest;
+  const active = activeStreams(list?.streams ?? [], {
+    self,
+    now,
+    clockOffset: player.clockOffset(),
+  });
+  const activeKey = active.join("\n");
+
+  // useQueries needs a stable object or it resubscribes every render.
   const latestName = getFunctionName(api.latest);
   const queries = useMemo(
     () =>
       Object.fromEntries(
-        active.map((stream) => [
-          stream,
-          { query: latestRef.current, args: { room, stream } },
-        ]),
+        activeKey
+          .split("\n")
+          .filter(Boolean)
+          .map((stream) => [
+            stream,
+            { query: apiRef.current.latest, args: { room, stream } },
+          ]),
       ),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [active, latestName, room],
+    [activeKey, latestName, room],
   );
   const results = useQueries(queries);
 
   useEffect(() => {
+    if (!live) return;
     for (const [stream, result] of Object.entries(results)) {
       if (Array.isArray(result)) player.ingest(stream, result);
     }
     render();
-  }, [results, player]);
+  }, [results, player, live, epoch]);
 
   // Tick every frame; only re-render while something is moving, plus one
   // last frame when it stops so the final value shows.
@@ -122,8 +233,7 @@ export function usePlayback<V>(
   }, [player]);
 
   const values = new Map<string, V>();
-  for (const stream of player.streams()) {
-    if (stream === exclude) continue;
+  for (const stream of active) {
     const value = player.value(stream);
     if (value !== undefined) values.set(stream, value);
   }

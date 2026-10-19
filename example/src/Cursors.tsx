@@ -11,14 +11,14 @@ export default function Cursors() {
   const [flushMs, setFlushMs] = useState(250);
   const [mouse, setMouse] = useState<Point>({ x: -100, y: -100 });
 
-  const send = useSender<Point>(api.cursors.append, {
+  const send = useSender(api.cursors.append, {
     room: ROOM,
     stream: me,
     flushMs,
   });
-  const { values, stats } = usePlayback<Point>(api.cursors, {
+  const { values, stats } = usePlayback(api.cursors, {
     room: ROOM,
-    exclude: me,
+    self: me,
     // No delayMs: it follows the senders' flush rate on its own.
     interpolate: true,
   });

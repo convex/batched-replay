@@ -34,7 +34,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
           samples: Array<{ t: number; v: any }>;
           stream: string;
         },
-        { end: number; seq: number; start: number },
+        null | { end: number; seq: number; start: number },
         Name
       >;
       history: FunctionReference<
@@ -91,8 +91,15 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
       list: FunctionReference<
         "query",
         "internal",
-        { room: string },
-        Array<{ firstStart: number; lastEnd: number; stream: string }>,
+        { limit?: number; room: string },
+        {
+          epoch: number;
+          streams: Array<{
+            firstStart: number;
+            lastEnd: number;
+            stream: string;
+          }>;
+        },
         Name
       >;
     };

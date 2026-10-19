@@ -9,17 +9,23 @@ const ROOM = "drawing-demo";
 export const { append, latest, history, streams } = exposeApi(
   components.batchedReplay,
   {
-    // Same anonymous-id pattern as cursors.ts: the demo has no sign-in.
-    auth: async (_ctx, operation) => {
-      if (operation.type === "write") {
-        if (!operation.stream) throw new Error("A stream key is required");
-        return operation.stream;
-      }
+    // Pen down, move or up, at a point on the 1600x900 board.
+    value: v.object({
+      k: v.union(v.literal("down"), v.literal("move"), v.literal("up")),
+      x: v.number(),
+      y: v.number(),
+    }),
+    // Same anonymous pattern as cursors.ts: the demo has no sign-in.
+    authorizeRead: async () => {},
+    authorizeWrite: async (_ctx, { stream }) => {
+      if (!stream) throw new Error("A stream key is required");
+      return stream;
     },
   },
 );
 
 // Deleting is destructive, so it isn't part of exposeApi: use the class.
+// Every viewer's onReset fires once it's done.
 export const clear = mutation({
   args: {},
   returns: v.null(),

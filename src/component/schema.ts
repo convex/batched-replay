@@ -24,5 +24,16 @@ export default defineSchema({
     stream: v.string(),
     firstStart: v.number(),
     lastEnd: v.number(), // touched at most every TOUCH_MS
-  }).index("by_room", ["room", "stream"]),
+  })
+    .index("by_room", ["room", "stream"])
+    .index("by_room_lastEnd", ["room", "lastEnd"]),
+
+  // Bumped each time a room is cleared, so every viewer finds out.
+  rooms: defineTable({
+    room: v.string(),
+    epoch: v.number(),
+    // When the whole room was last cleared. Samples captured before this that
+    // arrive late (still in a sender's buffer at the time) are dropped.
+    clearedAt: v.optional(v.number()),
+  }).index("by_room", ["room"]),
 });

@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import type { PointerEvent } from "react";
-import { useMutation, useQuery } from "convex/react";
+import { useMutation } from "convex/react";
 import {
   useHistory,
   usePlayback,
@@ -44,15 +44,14 @@ function drawSegment(
   ctx.stroke();
 }
 
-function clearBoard(canvas: HTMLCanvasElement | null) {
+function clearCanvas(canvas: HTMLCanvasElement | null) {
   const ctx = canvas?.getContext("2d");
   ctx?.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx?.clearRect(0, 0, WIDTH, HEIGHT);
 }
 
 // Draws one sample as a segment from the stream's last point. A "move" with
-// no pen state (history started mid-stroke, or the pen was lifted) just
-// starts a new path instead of joining an old one.
+// no pen state (the pen was lifted) just starts a new path.
 function applySample(
   canvas: HTMLCanvasElement | null,
   pens: Pens,
@@ -72,84 +71,49 @@ function applySample(
 
 export default function Drawing() {
   const me = useAnonymousId();
-  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const boardRef = useRef<HTMLCanvasElement>(null);
+  const timelapseRef = useRef<HTMLCanvasElement>(null);
   // Pen state is kept apart for each source, so strokes never join across
-  // history, the live player and the timelapse.
+  // your own pen, everyone else's and the timelapse.
   const [pens] = useState(() => ({
     mine: new Map() as Pens,
-    live: new Map() as Pens,
-    rebuild: new Map() as Pens,
+    board: new Map() as Pens,
     timelapse: new Map() as Pens,
   }));
   const clearRoom = useMutation(api.drawing.clear);
 
-  const send = useSender<Sample>(api.drawing.append, {
+  const send = useSender(api.drawing.append, {
     room: ROOM,
     stream: me,
     flushMs: FLUSH_MS,
   });
 
-  // Rebuilds the board from everything stored, as fast as it loads.
-  const rebuild = useHistory<Sample>(api.drawing, {
+  // The board: everything drawn so far, then everyone else's strokes a
+  // little behind live. When someone clears the room, start again.
+  const { stats } = usePlayback(api.drawing, {
     room: ROOM,
-    speed: Infinity,
+    self: me,
+    fromStart: true,
     onSample: (stream, sample) =>
-      applySample(canvasRef.current, pens.rebuild, stream, sample),
-  });
-  // Replays the whole room, at a speed you pick.
-  const timelapse = useHistory<Sample>(api.drawing, {
-    room: ROOM,
-    speed: 10,
-    onSample: (stream, sample) =>
-      applySample(canvasRef.current, pens.timelapse, stream, sample),
-  });
-
-  // Everyone else's strokes, a little behind live. Ignored until the board is
-  // rebuilt, and while the timelapse owns the canvas.
-  const { stats } = usePlayback<Sample>(api.drawing, {
-    room: ROOM,
-    exclude: me,
-    onSample: (stream, sample) => {
-      if (!rebuild.finished || timelapse.playing) return;
-      applySample(canvasRef.current, pens.live, stream, sample);
+      applySample(boardRef.current, pens.board, stream, sample),
+    onReset: () => {
+      clearCanvas(boardRef.current);
+      pens.board.clear();
     },
   });
 
-  const restartRebuild = rebuild.restart;
-  const rebuildBoard = useCallback(() => {
-    clearBoard(canvasRef.current);
-    pens.rebuild.clear();
-    pens.live.clear();
-    restartRebuild();
-  }, [pens, restartRebuild]);
-
-  // On load, draw what's already there.
-  useEffect(rebuildBoard, [rebuildBoard]);
-
-  // When the timelapse ends, rebuild so nothing drawn meanwhile is missing.
-  useEffect(() => {
-    if (timelapse.finished) rebuildBoard();
-  }, [timelapse.finished, rebuildBoard]);
-
-  // Clear board deletes the room's streams. Nothing else tells a viewer that,
-  // so rebuild (from empty history) when the stream list goes to empty.
-  const streamCount = useQuery(api.drawing.streams, { room: ROOM })?.length;
-  const lastStreamCount = useRef<number>(undefined);
-  useEffect(() => {
-    if (lastStreamCount.current && streamCount === 0 && !timelapse.playing) {
-      rebuildBoard();
-    }
-    lastStreamCount.current = streamCount;
-  }, [streamCount, timelapse.playing, rebuildBoard]);
-
+  // The timelapse plays on its own canvas over the board, so the board
+  // keeps up with live strokes underneath.
+  const timelapse = useHistory(api.drawing, {
+    room: ROOM,
+    speed: 10,
+    onSample: (stream, sample) =>
+      applySample(timelapseRef.current, pens.timelapse, stream, sample),
+  });
   const startTimelapse = () => {
-    clearBoard(canvasRef.current);
+    clearCanvas(timelapseRef.current);
     pens.timelapse.clear();
     timelapse.restart();
-  };
-  const stopTimelapse = () => {
-    timelapse.pause();
-    rebuildBoard();
   };
 
   const toBoard = (e: PointerEvent<HTMLCanvasElement>): Point => {
@@ -162,7 +126,7 @@ export default function Drawing() {
   // Your own strokes are drawn locally, with no delay, and sent as well.
   const pen = (k: Sample["k"], e: PointerEvent<HTMLCanvasElement>) => {
     const sample = { k, ...toBoard(e) };
-    applySample(canvasRef.current, pens.mine, me, sample);
+    applySample(boardRef.current, pens.mine, me, sample);
     send(sample, k === "move" ? undefined : { keep: true });
   };
   const penUp = (e: PointerEvent<HTMLCanvasElement>) => {
@@ -181,8 +145,7 @@ export default function Drawing() {
         <div>Playing {Math.round(stats.delayMs)} ms behind</div>
         <div>
           <button
-            disabled={!rebuild.finished && !timelapse.playing}
-            onClick={timelapse.playing ? stopTimelapse : startTimelapse}
+            onClick={timelapse.playing ? timelapse.pause : startTimelapse}
           >
             {timelapse.playing ? "Stop timelapse" : "Timelapse"}
           </button>
@@ -205,7 +168,7 @@ export default function Drawing() {
       </div>
       <div className="board-wrap">
         <canvas
-          ref={canvasRef}
+          ref={boardRef}
           className="board"
           width={WIDTH * dpr}
           height={HEIGHT * dpr}
@@ -219,6 +182,13 @@ export default function Drawing() {
           }}
           onPointerUp={penUp}
           onPointerCancel={penUp}
+        />
+        <canvas
+          ref={timelapseRef}
+          className="board timelapse"
+          hidden={!timelapse.playing}
+          width={WIDTH * dpr}
+          height={HEIGHT * dpr}
         />
       </div>
     </>

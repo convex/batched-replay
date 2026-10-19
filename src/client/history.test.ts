@@ -184,4 +184,65 @@ describe("HistoryPlayer", () => {
     player.tick();
     expect(played).toEqual([3]); // only the page loaded after reset
   });
+
+  test("a failed load backs off, 1 s doubling to 10 s, and reports the error", async () => {
+    let clock = 0;
+    let failing = true;
+    const attempts: number[] = [];
+    const player = new HistoryPlayer<number, Cursor>({
+      now: () => clock,
+      load: async () => {
+        attempts.push(clock);
+        if (failing) throw new Error("offline");
+        return { batches: page1, next: null };
+      },
+    });
+    const flush = () => new Promise((r) => setTimeout(r, 0));
+    player.play();
+    // Tick every frame (16 ms) for 40 s.
+    for (; clock < 40_000; clock += 16) {
+      player.tick();
+      await flush();
+    }
+    expect(attempts.length).toBeLessThan(10);
+    const waits = attempts.slice(1).map((at, i) => at - attempts[i]);
+    expect(waits.slice(0, 5).map((w) => Math.round(w / 1000))).toEqual([
+      1, 2, 4, 8, 10,
+    ]);
+    expect(player.error()).toEqual(new Error("offline"));
+
+    failing = false;
+    for (const end = clock + 11_000; clock < end; clock += 16) {
+      player.tick();
+      await flush();
+    }
+    expect(player.error()).toBeUndefined();
+    expect(player.isFinished()).toBe(true);
+  });
+
+  test("idle stretches longer than maxGapMs are cut short", async () => {
+    const pages = [
+      [
+        { stream: "a", start: 0, samples: [{ t: 0, v: 1 }] },
+        { stream: "a", start: 500, samples: [{ t: 0, v: 2 }] },
+        // An hour of nothing, then more drawing.
+        { stream: "a", start: 3_600_000, samples: [{ t: 0, v: 3 }] },
+        { stream: "a", start: 3_600_300, samples: [{ t: 0, v: 4 }] },
+      ],
+    ];
+    const { player, played, flush, advance } = setup(pages);
+    player.play();
+    await flush();
+    advance(500);
+    player.tick();
+    expect(played.map((p) => p[1])).toEqual([1, 2]);
+    advance(2_000); // the hour plays as the default 2 s
+    player.tick();
+    expect(played.map((p) => p[1])).toEqual([1, 2, 3]);
+    advance(300);
+    player.tick();
+    // onSample still gets each sample's real time.
+    expect(played.map((p) => p[2])).toEqual([0, 500, 3_600_000, 3_600_300]);
+    expect(player.isFinished()).toBe(true);
+  });
 });

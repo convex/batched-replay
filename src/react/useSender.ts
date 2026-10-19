@@ -19,22 +19,28 @@ export function useSender<V>(
   append: AppendRef<V>,
   options: {
     room: string;
+    /** The stream you'd like; the app's authorizeWrite has the final say. */
     stream?: string;
     flushMs?: number;
     sampleMs?: number;
+    /** Called when a send fails. It's retried, with backoff. */
+    onError?: (error: unknown) => void;
   },
 ) {
   const appendMutation = useMutation(append);
   const appendRef = useRef(appendMutation);
+  const onErrorRef = useRef(options.onError);
   useEffect(() => {
     appendRef.current = appendMutation;
+    onErrorRef.current = options.onError;
   });
   const senderRef = useRef<Sender<V> | null>(null);
   const { room, stream, flushMs, sampleMs } = options;
 
   useEffect(() => {
     const sender = new Sender<V>({
-      flush: (batch) => appendRef.current({ room, stream, ...batch }),
+      send: (batch) => appendRef.current({ room, stream, ...batch }),
+      onError: (error) => onErrorRef.current?.(error),
       flushMs,
       sampleMs,
     });

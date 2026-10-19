@@ -7,18 +7,20 @@ import { initConvexTest } from "./setup.test.js";
 const T0 = 1_000_000;
 const sample = (t: number) => ({ t, v: { x: t } });
 
-function append(
+async function append(
   t: ReturnType<typeof initConvexTest>,
   opts: { stream?: string; duration?: number; retentionMs?: number } = {},
 ) {
   const duration = opts.duration ?? 250;
-  return t.mutation(api.batches.append, {
+  const result = await t.mutation(api.batches.append, {
     room: "r",
     stream: opts.stream ?? "a",
     samples: [sample(0), sample(duration)],
     duration,
     retentionMs: opts.retentionMs,
   });
+  if (!result) throw new Error("the batch was dropped");
+  return result;
 }
 
 describe("batches.append", () => {
@@ -28,6 +30,39 @@ describe("batches.append", () => {
   });
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  test("drops samples captured before the room was cleared", async () => {
+    const t = initConvexTest();
+    await append(t);
+    // Clear at T0 + 1000, then a batch covering T0 + 900..1100 arrives.
+    vi.setSystemTime(T0 + 1_000);
+    await t.mutation(api.streams.clear, { room: "r" });
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+    vi.setSystemTime(T0 + 1_100);
+    const kept = await t.mutation(api.batches.append, {
+      room: "r",
+      stream: "a",
+      samples: [sample(0), sample(50), sample(150), sample(200)],
+      duration: 200,
+    });
+    expect(kept).not.toBeNull();
+    const [batch] = await t.query(api.batches.latest, {
+      room: "r",
+      stream: "a",
+    });
+    expect(batch.samples.map((s) => s.t)).toEqual([150, 200]);
+
+    // A batch captured entirely before the clear is dropped altogether.
+    vi.setSystemTime(T0 + 1_050);
+    expect(
+      await t.mutation(api.batches.append, {
+        room: "r",
+        stream: "b",
+        samples: [sample(0), sample(40)],
+        duration: 100,
+      }),
+    ).toBeNull();
   });
 
   test("seq increments per stream", async () => {
@@ -99,6 +134,29 @@ describe("batches.append", () => {
     ).rejects.toThrow(/1 to 2000 samples/);
   });
 
+  test("rejects times that aren't finite numbers", async () => {
+    const t = initConvexTest();
+    const base = { room: "r", stream: "a", duration: 100 };
+    await expect(
+      t.mutation(api.batches.append, { ...base, samples: [sample(NaN)] }),
+    ).rejects.toThrow(/sample times/);
+    await expect(
+      t.mutation(api.batches.append, {
+        ...base,
+        samples: [sample(0), sample(Infinity)],
+      }),
+    ).rejects.toThrow(/sample times/);
+    for (const duration of [NaN, Infinity, -1]) {
+      await expect(
+        t.mutation(api.batches.append, {
+          ...base,
+          duration,
+          samples: [sample(0)],
+        }),
+      ).rejects.toThrow(/duration/);
+    }
+  });
+
   test("sets expiresAt from retentionMs", async () => {
     const t = initConvexTest();
     await append(t, { retentionMs: 5_000 });
@@ -114,7 +172,7 @@ describe("batches.append", () => {
   test("touches the stream doc at most every 5s", async () => {
     const t = initConvexTest();
     const lastEnd = async () =>
-      (await t.query(api.streams.list, { room: "r" }))[0].lastEnd;
+      (await t.query(api.streams.list, { room: "r" })).streams[0].lastEnd;
     await append(t);
     expect(await lastEnd()).toBe(T0);
     vi.setSystemTime(T0 + 4_000);
@@ -135,7 +193,7 @@ describe("batches.latest", () => {
     vi.useRealTimers();
   });
 
-  test("returns the newest batches oldest first, default 3", async () => {
+  test("returns the newest batches oldest first, default 2", async () => {
     const t = initConvexTest();
     for (let i = 0; i < 5; i++) {
       vi.setSystemTime(T0 + i * 250);
@@ -145,13 +203,13 @@ describe("batches.latest", () => {
       room: "r",
       stream: "a",
     });
-    expect(batches.map((b) => b.seq)).toEqual([2, 3, 4]);
-    const two = await t.query(api.batches.latest, {
+    expect(batches.map((b) => b.seq)).toEqual([3, 4]);
+    const three = await t.query(api.batches.latest, {
       room: "r",
       stream: "a",
-      count: 2,
+      count: 3,
     });
-    expect(two.map((b) => b.seq)).toEqual([3, 4]);
+    expect(three.map((b) => b.seq)).toEqual([2, 3, 4]);
   });
 
   test("only returns the asked stream", async () => {

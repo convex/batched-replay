@@ -58,6 +58,7 @@
   place-items: center;
 }
 .board {
+  grid-area: 1 / 1; /* the timelapse canvas sits on top of the board */
   width: min(100vw, calc(100vh * 16 / 9));
   aspect-ratio: 16 / 9;
   background: #1c1c22;
@@ -80,4 +81,10 @@
 }
 .hud button[aria-pressed="true"] {
   background: #fff5;
+}
+.board.timelapse {
+  pointer-events: none;
+}
+.board[hidden] {
+  display: none;
 }

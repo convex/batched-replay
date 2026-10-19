@@ -1,3 +1,4 @@
+import { v } from "convex/values";
 import { components } from "./_generated/api.js";
 import { exposeApi } from "@convex-dev/batched-replay";
 
@@ -5,16 +6,16 @@ import { exposeApi } from "@convex-dev/batched-replay";
 export const { append, latest, history, streams } = exposeApi(
   components.batchedReplay,
   {
+    // What one sample is. Checked on every append, and it types the hooks.
+    value: v.object({ x: v.number(), y: v.number() }),
     // Cursor batches are only interesting live, so keep them for ten minutes.
     retentionMs: 10 * 60_000,
-    // The demo has no sign-in, so each browser picks its own anonymous id.
-    // A real app returns a key from ctx.auth (e.g. the user's tokenIdentifier)
-    // so nobody can write into someone else's stream.
-    auth: async (_ctx, operation) => {
-      if (operation.type === "write") {
-        if (!operation.stream) throw new Error("A stream key is required");
-        return operation.stream;
-      }
+    // The demo has no sign-in: anyone can watch, and each tab picks its own
+    // anonymous stream key. See the README for the signed-in version.
+    authorizeRead: async () => {},
+    authorizeWrite: async (_ctx, { stream }) => {
+      if (!stream) throw new Error("A stream key is required");
+      return stream;
     },
   },
 );

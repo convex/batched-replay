@@ -1,16 +1,18 @@
 export type Sample<V> = { t: number; v: V };
-export type Flush<V> = (batch: {
+export type Send<V> = (batch: {
   samples: Sample<V>[];
   duration: number;
 }) => Promise<unknown>;
 
 export type SenderOptions<V> = {
   /** Sends one batch, usually by calling the app's append mutation. */
-  flush: Flush<V>;
+  send: Send<V>;
   /** How long a window collects samples before it is sent. */
   flushMs?: number;
   /** 0 keeps every sample; otherwise at most one per sampleMs, plus the last. */
   sampleMs?: number;
+  /** Called each time a send fails. Its samples are retried, with backoff. */
+  onError?: (error: unknown) => void;
   now?: () => number;
 };
 
@@ -18,17 +20,20 @@ export type SenderOptions<V> = {
 // would reject.
 const MAX_BUFFERED = 2_000;
 const MAX_WINDOW_MS = 60_000;
+// Retries wait flushMs, then twice that each time, up to this.
+const MAX_BACKOFF_MS = 5_000;
 
 type Pending<V> = { at: number; v: V };
 
 /**
  * Collects fast-changing values and sends them as one batch per window.
- * One flush at a time; samples from a failed flush are retried with the next.
+ * One send at a time; samples from a failed send are retried with the next.
  */
 export class Sender<V> {
-  private readonly flushFn: Flush<V>;
+  private readonly sendFn: Send<V>;
   private readonly flushMs: number;
   private readonly sampleMs: number;
+  private readonly onError?: (error: unknown) => void;
   private readonly now: () => number;
 
   private buffer: Pending<V>[] = [];
@@ -38,12 +43,14 @@ export class Sender<V> {
   private timer: ReturnType<typeof setTimeout> | undefined;
   private inFlight: Promise<void> | null = null;
   private disposed = false;
-  private retryLater = false;
+  private failures = 0; // in a row
+  private retryAt = 0; // after a failure, nothing goes out before this
 
   constructor(options: SenderOptions<V>) {
-    this.flushFn = options.flush;
+    this.sendFn = options.send;
     this.flushMs = options.flushMs ?? 250;
     this.sampleMs = options.sampleMs ?? 0;
+    this.onError = options.onError;
     this.now = options.now ?? Date.now;
   }
 
@@ -66,7 +73,7 @@ export class Sender<V> {
       this.buffer.push(sample);
       this.lastKeptAt = at;
     }
-    this.capBuffer();
+    if (this.buffer.length > MAX_BUFFERED) this.buffer.shift();
     this.schedule(this.flushMs - (at - this.windowStart()));
   }
 
@@ -99,27 +106,37 @@ export class Sender<V> {
         this.timer = undefined;
         void this.send();
       },
-      Math.max(0, delay),
+      Math.max(0, delay, this.retryAt - this.now()),
     );
   }
 
   private send(): Promise<void> {
     if (this.inFlight) return this.inFlight;
     this.takeTrailing();
+    // The server rejects a batch longer than a minute, so samples that old
+    // (left over from failed sends) are dropped.
+    const now = this.now();
+    this.buffer = this.buffer.filter((s) => s.at >= now - MAX_WINDOW_MS);
     if (this.buffer.length === 0) return Promise.resolve();
     const sent = this.buffer;
     this.buffer = [];
     const start = sent[0].at;
-    const duration = this.now() - start;
+    const duration = now - start;
     const samples = sent.map(({ at, v }) => ({ t: at - start, v }));
-    this.inFlight = this.flushFn({ samples, duration })
+    this.inFlight = this.sendFn({ samples, duration })
       .then(
-        () => undefined,
         () => {
-          // Keep the samples; they go out with the next window.
-          this.buffer = sent.concat(this.buffer);
-          this.capBuffer();
-          this.retryLater = true;
+          this.failures = 0;
+          this.retryAt = 0;
+        },
+        (error: unknown) => {
+          // Keep the samples; they go out with the next window, after a
+          // backoff of flushMs, then twice that each time, up to 5 s.
+          this.buffer = sent.concat(this.buffer).slice(-MAX_BUFFERED);
+          this.failures++;
+          const backoff = this.flushMs * 2 ** (this.failures - 1);
+          this.retryAt = this.now() + Math.min(backoff, MAX_BACKOFF_MS);
+          this.onError?.(error);
         },
       )
       .finally(() => {
@@ -129,24 +146,10 @@ export class Sender<V> {
     return this.inFlight;
   }
 
-  // After a flush resolves, the next one goes out when the window that kept
-  // collecting meanwhile is due, or a full flushMs later after a failure.
+  // After a send resolves, the next one goes out when the window that kept
+  // collecting meanwhile is due (or when the backoff ends, after a failure).
   private scheduleNext() {
     if (this.buffer.length === 0 && !this.trailing) return;
-    const wait = this.retryLater
-      ? this.flushMs
-      : this.flushMs - (this.now() - this.windowStart());
-    this.retryLater = false;
-    this.schedule(wait);
-  }
-
-  private capBuffer() {
-    const newest = this.buffer[this.buffer.length - 1];
-    while (
-      this.buffer.length > MAX_BUFFERED ||
-      (newest && newest.at - this.buffer[0].at > MAX_WINDOW_MS)
-    ) {
-      this.buffer.shift();
-    }
+    this.schedule(this.flushMs - (this.now() - this.windowStart()));
   }
 }

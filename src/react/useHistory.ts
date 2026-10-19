@@ -31,6 +31,8 @@ export function useHistory<V>(
     room: string;
     stream?: string;
     speed?: number;
+    /** Idle stretches longer than this are cut down to it. Default 2,000 ms. */
+    maxGapMs?: number;
     onSample?: (stream: string, value: V, time: number) => void;
   },
 ) {
@@ -52,6 +54,7 @@ export function useHistory<V>(
     () =>
       new HistoryPlayer<V, Cursor>({
         speed: options.speed,
+        maxGapMs: options.maxGapMs,
         load: (after) =>
           convex.query(historyRef.current, { room, stream, after, limit: 200 }),
         onSample: (s, value, time) => onSampleRef.current?.(s, value, time),
@@ -74,6 +77,8 @@ export function useHistory<V>(
     position: player.position(),
     playing: player.isPlaying(),
     finished: player.isFinished(),
+    /** The last failed page load; it's retried with backoff. */
+    error: player.error(),
     speed,
     values: player.values(),
     play: useCallback(() => {

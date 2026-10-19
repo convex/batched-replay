@@ -19,7 +19,11 @@ export const append = mutation({
     duration: v.number(),
     retentionMs: v.optional(v.number()),
   },
-  returns: v.object({ seq: v.number(), start: v.number(), end: v.number() }),
+  // Null when every sample was captured before the room was last cleared.
+  returns: v.union(
+    v.null(),
+    v.object({ seq: v.number(), start: v.number(), end: v.number() }),
+  ),
   handler: async (ctx, args) => {
     validate(args.samples, args.duration);
     const now = Date.now();
@@ -41,6 +45,17 @@ export const append = mutation({
       if (start > idealStart + MAX_CLAMP_MS) start = idealStart;
     }
     const end = start + args.duration;
+
+    // Someone cleared the room while these were still in the sender's buffer:
+    // keep only what was captured after the clear.
+    const roomDoc = await ctx.db
+      .query("rooms")
+      .withIndex("by_room", (q) => q.eq("room", args.room))
+      .unique();
+    const clearedAt = roomDoc?.clearedAt ?? -Infinity;
+    const samples = args.samples.filter((s) => start + s.t >= clearedAt);
+    if (samples.length === 0) return null;
+
     const seq = prev ? prev.seq + 1 : 0;
     const expiresAt =
       args.retentionMs === undefined ? undefined : end + args.retentionMs;
@@ -51,7 +66,7 @@ export const append = mutation({
       seq,
       start,
       end,
-      samples: args.samples,
+      samples,
       expiresAt,
     });
 
@@ -79,7 +94,7 @@ export const latest = query({
   args: { room: v.string(), stream: v.string(), count: v.optional(v.number()) },
   returns: v.array(batchValidator),
   handler: async (ctx, args) => {
-    const count = Math.min(Math.max(args.count ?? 3, 1), 20);
+    const count = Math.min(Math.max(args.count ?? 2, 1), 20);
     const newestFirst = await ctx.db
       .query("batches")
       .withIndex("by_stream", (q) =>
@@ -163,7 +178,11 @@ function roomRows(
 }
 
 function validate(samples: { t: number }[], duration: number) {
-  if (!(duration >= 0 && duration <= MAX_DURATION_MS)) {
+  if (
+    !Number.isFinite(duration) ||
+    duration < 0 ||
+    duration > MAX_DURATION_MS
+  ) {
     throw new Error(`duration must be between 0 and ${MAX_DURATION_MS} ms`);
   }
   if (samples.length < 1 || samples.length > MAX_SAMPLES) {
@@ -171,7 +190,7 @@ function validate(samples: { t: number }[], duration: number) {
   }
   let previous = 0;
   for (const { t } of samples) {
-    if (t < previous || t > duration) {
+    if (!Number.isFinite(t) || t < previous || t > duration) {
       throw new Error(
         "sample times must be non-decreasing and within [0, duration]",
       );
