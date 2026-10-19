@@ -40,6 +40,27 @@ describe("Sender", () => {
     vi.useRealTimers();
   });
 
+  test("sample times never go backwards, even if the clock does", async () => {
+    const batches: Batch[] = [];
+    let now = 1_000;
+    const sender = new Sender<number>({
+      send: async (batch) => void batches.push(batch),
+      now: () => now,
+    });
+    sender.push(1);
+    now = 1_050;
+    sender.push(2);
+    now = 1_020; // the clock stepped back 30 ms
+    sender.push(3);
+    now = 1_100;
+    sender.push(4);
+    await sender.flush();
+    const ts = batches[0].samples.map((s) => s.t);
+    expect(ts).toEqual([0, 50, 50, 100]);
+    expect(ts.every((t) => t <= batches[0].duration)).toBe(true);
+    sender.dispose();
+  });
+
   test("sends nothing while idle", async () => {
     const { send } = setup();
     await vi.advanceTimersByTimeAsync(5_000);

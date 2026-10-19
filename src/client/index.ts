@@ -176,7 +176,9 @@ export function exposeApi<
         stream: v.string(),
         count: v.optional(v.number()),
       },
-      returns: v.array(batchValidatorFor(value)),
+      // Reads don't re-check stored values against `value` (they were
+      // checked on the way in), so changing it later can't lock old rooms.
+      returns: v.array(batchValidatorFor(v.any())),
       handler: async (ctx, args) => {
         await authorizeRead(ctx, args.room);
         return await ctx.runQuery(component.batches.latest, args);
@@ -189,7 +191,7 @@ export function exposeApi<
         after: v.optional(cursorValidator),
         limit: v.optional(v.number()),
       },
-      returns: historyPageValidatorFor(value),
+      returns: historyPageValidatorFor(v.any()),
       handler: async (ctx, args) => {
         await authorizeRead(ctx, args.room);
         return await ctx.runQuery(component.batches.history, args);

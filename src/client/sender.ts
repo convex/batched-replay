@@ -51,7 +51,9 @@ export class Sender<V> {
     this.flushMs = options.flushMs ?? 250;
     this.sampleMs = options.sampleMs ?? 0;
     this.onError = options.onError;
-    this.now = options.now ?? Date.now;
+    // performance.now() never steps backwards the way the wall clock can
+    // (sleep, time sync), which would make the server reject a batch.
+    this.now = options.now ?? (() => performance.now());
   }
 
   /**
@@ -122,7 +124,12 @@ export class Sender<V> {
     this.buffer = [];
     const start = sent[0].at;
     const duration = now - start;
-    const samples = sent.map(({ at, v }) => ({ t: at - start, v }));
+    // Keep times in order and inside the window, whatever the clock did.
+    let last = 0;
+    const samples = sent.map(({ at, v }) => {
+      last = Math.min(duration, Math.max(last, at - start));
+      return { t: last, v };
+    });
     this.inFlight = this.sendFn({ samples, duration })
       .then(
         () => {

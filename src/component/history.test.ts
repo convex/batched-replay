@@ -193,6 +193,7 @@ describe("cleanup", () => {
         });
       }
     });
+    vi.setSystemTime(Date.now() + 1_000); // a clear comes after what it clears
     await t.mutation(api.streams.clear, { room: "r" });
     expect(await count(t)).toBe(251 - CHUNK);
     await t.finishAllScheduledFunctions(vi.runAllTimers);
@@ -201,6 +202,30 @@ describe("cleanup", () => {
       epoch: 2,
       streams: [],
     });
+  });
+
+  test("a clear keeps what was drawn while it ran", async () => {
+    const t = initConvexTest();
+    await t.run(async (ctx) => {
+      for (let i = 0; i < 250; i++) {
+        await ctx.db.insert("batches", {
+          room: "r",
+          stream: "old",
+          seq: i,
+          start: T0,
+          end: T0,
+          samples: [],
+        });
+      }
+    });
+    vi.setSystemTime(T0 + 1_000);
+    await t.mutation(api.streams.clear, { room: "r" }); // first chunk only
+    vi.setSystemTime(T0 + 1_500);
+    await append(t, "new"); // someone draws before the clear has finished
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+    expect(await count(t)).toBe(1);
+    const { streams } = await t.query(api.streams.list, { room: "r" });
+    expect(streams.map((s) => s.stream)).toEqual(["new"]);
   });
 
   describe("with batches near the 1 MiB document limit", () => {
@@ -234,6 +259,7 @@ describe("cleanup", () => {
     test("clear stays under the read limit", async () => {
       const t = initStrict();
       await insertBig(t);
+      vi.setSystemTime(Date.now() + 1_000); // a clear comes after what it clears
       await t.mutation(api.streams.clear, { room: "r" });
       await t.finishAllScheduledFunctions(vi.runAllTimers);
       expect(

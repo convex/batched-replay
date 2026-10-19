@@ -336,6 +336,10 @@ export class Player<V> {
       const batch = state.held.shift()!;
       if (batch.seq === state.seq! + 1) this.play(state, batch, "live");
     }
+    // A fill that moved things on earns another full wait for the rest.
+    if (kind === "fill" && state.seq !== seqBefore && state.held.length > 0) {
+      state.gapSince = arrivedAt;
+    }
     if (state.held.length === 0) {
       state.gapSince = undefined;
     } else if (!this.fetchAfter) {

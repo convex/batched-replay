@@ -105,6 +105,13 @@ export function usePlayback<V>(
   if (fromStart && !historyName) {
     throw new Error("usePlayback: fromStart needs `history` in the api");
   }
+  useEffect(() => {
+    if (!historyName) {
+      console.warn(
+        "usePlayback: without `history` in the api, missed batches can't be filled in",
+      );
+    }
+  }, [historyName]);
 
   const player = useMemo(
     () =>

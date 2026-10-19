@@ -385,6 +385,29 @@ describe("Player", () => {
   });
 
   describe("gaps", () => {
+    test("a fill that makes progress earns more time for the rest", async () => {
+      const releases: ((batches: PlayerBatch<P>[]) => void)[] = [];
+      const fetchAfter = vi.fn(
+        () => new Promise<PlayerBatch<P>[]>((r) => releases.push(r)),
+      );
+      const t = setup({ fetchAfter });
+      t.subscribe();
+      const base = t.server();
+      const b = (seq: number) => batch(base + seq * 250, one(seq), { seq });
+      t.player.ingest("a", [b(0)]);
+      t.player.ingest("a", [b(5)]); // 1 to 4 are missing
+      t.advance(1_500);
+      releases[0]([b(1), b(2)]); // first page: progress
+      await Promise.resolve();
+      t.advance(1_500); // 3 s since the gap opened, 1.5 s since progress
+      t.player.tick();
+      expect(t.xs()).toEqual([0, 1, 2]); // still waiting for 3 and 4
+      releases[1]([b(3), b(4)]);
+      await Promise.resolve();
+      t.player.tick();
+      expect(t.xs()).toEqual([0, 1, 2, 3, 4, 5]);
+    });
+
     test("missing batches are fetched, and everything plays in order", async () => {
       let release: (batches: PlayerBatch<P>[]) => void = () => {};
       const fetchAfter = vi.fn(

@@ -68,6 +68,10 @@ interleave and keep clamping against each other, so the stream jitters. Make the
 key the user plus a session id each tab picks for itself (for example
 `crypto.randomUUID()` kept in `sessionStorage`), as above.
 
+`usePlayback`'s `self` has to be that same key, so the client needs to know it.
+Build it on the client and pass it as `stream` (with `authorizeWrite` checking
+it starts with the signed-in user), or return it from a query of your own.
+
 The example app has no sign-in, so its `authorizeRead` allows everyone and its
 `authorizeWrite` trusts the client's anonymous key. Don't ship that.
 
