@@ -1,10 +1,10 @@
 {
-  "name": "@convex-dev/replay",
+  "name": "@convex-dev/batched-replay",
   "description": "A replay component for Convex.",
-  "repository": "github:get-convex/replay",
-  "homepage": "https://github.com/get-convex/replay#readme",
+  "repository": "github:get-convex/batched-replay",
+  "homepage": "https://github.com/get-convex/batched-replay#readme",
   "bugs": {
-    "url": "https://github.com/get-convex/replay/issues"
+    "url": "https://github.com/get-convex/batched-replay/issues"
   },
   "version": "0.1.0",
   "license": "Apache-2.0",

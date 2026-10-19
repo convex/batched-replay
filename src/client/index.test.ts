@@ -2,66 +2,64 @@ import { describe, expect, expectTypeOf, test } from "vitest";
 import { defineTestApp } from "convex-test";
 import { exposeApi } from "./index.js";
 import { defineSchema } from "convex/server";
-import { v } from "convex/values";
 import componentTest from "../test.js";
 import type { ComponentApi } from "../component/_generated/component.js";
 
 // A small host app for the client, without generated app files or a module glob.
 const app = defineTestApp({
   schema: defineSchema({}),
-  components: { replay: componentTest },
+  components: { batchedReplay: componentTest },
 });
 const { api, createTest } = app.defineModules({
-  comments: {
-    currentUser: app.query({
-      args: {},
-      returns: v.union(v.string(), v.null()),
-      handler: async (ctx) => {
-        return (await ctx.auth.getUserIdentity())?.subject ?? null;
-      },
-    }),
-    ...exposeApi(app.components.replay, {
-      auth: async (ctx, _operation) => {
-        const identity = await ctx.auth.getUserIdentity();
-        if (!identity) throw new Error("Unauthorized");
-        return identity.subject;
-      },
-      baseUrl: "https://pirate.monkeyness.com",
-    }),
-  },
+  cursors: exposeApi(app.components.batchedReplay, {
+    // The stream key is the signed-in user; reads need a user too.
+    auth: async (ctx, operation) => {
+      const identity = await ctx.auth.getUserIdentity();
+      if (!identity) throw new Error("Unauthorized");
+      if (operation.type === "write") return identity.subject;
+    },
+  }),
 });
 
-describe("client tests", () => {
-  test("should be able to use client", async () => {
-    expectTypeOf(app.components.replay).toEqualTypeOf<
-      ComponentApi<"replay">
+const samples = [{ t: 0, v: { x: 1 } }];
+
+describe("exposeApi", () => {
+  test("writes go to the stream the auth callback picks", async () => {
+    expectTypeOf(app.components.batchedReplay).toEqualTypeOf<
+      ComponentApi<"batchedReplay">
     >();
     const t = createTest().withIdentity({ subject: "user1" });
-    expect(await t.query(api.comments.currentUser, {})).toBe("user1");
-    const targetId = "test-subject-1";
-    await t.mutation(api.comments.add, {
-      text: "My first comment",
-      targetId,
+    // The client asks for someone else's stream; auth overrides it.
+    await t.mutation(api.cursors.append, {
+      room: "r",
+      stream: "user2",
+      samples,
+      duration: 100,
     });
-    const comments = await t.query(api.comments.list, { targetId });
-    expect(comments).toHaveLength(1);
-    expect(comments[0].text).toBe("My first comment");
-    expect(comments[0].userId).toBe("user1");
+    const streams = await t.query(api.cursors.streams, { room: "r" });
+    expect(streams.map((s) => s.stream)).toEqual(["user1"]);
+    const batches = await t.query(api.cursors.latest, {
+      room: "r",
+      stream: "user1",
+    });
+    expect(batches).toHaveLength(1);
+    expect(batches[0].samples).toEqual(samples);
+    const page = await t.query(api.cursors.history, { room: "r" });
+    expect(page.batches).toHaveLength(1);
   });
 
-  test("rejects unauthenticated calls before writing to the component", async () => {
+  test("rejects unauthenticated calls before touching the component", async () => {
     const t = createTest();
-    const targetId = "test-subject-1";
     await expect(
-      t.mutation(api.comments.add, { text: "Not allowed", targetId }),
+      t.mutation(api.cursors.append, { room: "r", samples, duration: 100 }),
     ).rejects.toThrow("Unauthorized");
-    await expect(t.query(api.comments.list, { targetId })).rejects.toThrow(
+    await expect(t.query(api.cursors.streams, { room: "r" })).rejects.toThrow(
       "Unauthorized",
     );
     expect(
       await t
         .withIdentity({ subject: "user1" })
-        .query(api.comments.list, { targetId }),
+        .query(api.cursors.streams, { room: "r" }),
     ).toEqual([]);
   });
 });

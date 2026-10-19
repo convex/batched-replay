@@ -16,7 +16,7 @@ const modules = import.meta.glob("./component/**/*.ts");
  */
 export function register<
   Schema extends SchemaDefinition<GenericSchema, boolean>,
->(t: TestConvex<Schema>, name: string = "replay") {
+>(t: TestConvex<Schema>, name: string = "batchedReplay") {
   t.registerComponent(name, schema, modules);
   return componentsGeneric()[name] as unknown as ComponentApi;
 }

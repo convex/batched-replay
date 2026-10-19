@@ -8,7 +8,7 @@
  * @module
  */
 
-import type * as example from "../example.js";
+import type * as cursors from "../cursors.js";
 
 import type {
   ApiFromModules,
@@ -17,7 +17,7 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
-  example: typeof example;
+  cursors: typeof cursors;
 }>;
 
 /**
@@ -47,5 +47,5 @@ export declare const internal: FilterApi<
 >;
 
 export declare const components: {
-  replay: import("@convex-dev/replay/_generated/component.js").ComponentApi<"replay">;
+  batchedReplay: import("@convex-dev/batched-replay/_generated/component.js").ComponentApi<"batchedReplay">;
 };

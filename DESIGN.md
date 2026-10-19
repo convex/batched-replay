@@ -1,4 +1,4 @@
-# @convex-dev/replay: design (v0.1)
+# @convex-dev/batched-replay: design (v0.1)
 
 Working name. A Convex component for "realtime-ish" high-frequency data: the
 sender batches fast-changing values (cursor positions, pen strokes, game
@@ -75,7 +75,7 @@ All public component functions have `args` and `returns` validators.
 ## App-side client (`src/client/index.ts`)
 
 ```ts
-export class Replay {
+export class BatchedReplay {
   constructor(component: ComponentApi, options?: { retentionMs?: number })
   append(ctx, { room, stream, samples, duration })   // passes options.retentionMs
   latest(ctx, { room, stream, count? })
@@ -85,7 +85,7 @@ export class Replay {
 }
 
 // Ready-made functions to re-export, like the template's exposeApi:
-export const { append, latest, history, streams } = exposeApi(components.replay, {
+export const { append, latest, history, streams } = exposeApi(components.batchedReplay, {
   retentionMs?: number,
   // Return the stream key this caller may write to, or throw.
   // For reads, return anything or throw to deny.
@@ -96,7 +96,7 @@ export const { append, latest, history, streams } = exposeApi(components.replay,
 The app's `append` takes `{ room, stream?, samples, duration }` from the client.
 The `auth` callback picks the actual stream key, so a client can't write into
 someone else's stream unless the app allows it. Typed generics so the app can
-say what `v` is (`Replay<{ x: number; y: number }>` or similar) without the
+say what `v` is (`BatchedReplay<{ x: number; y: number }>` or similar) without the
 component validating it.
 
 ## Plain TS cores (`src/client/sender.ts`, `src/client/player.ts`)
@@ -126,7 +126,7 @@ sender.dispose()
 
 ```ts
 const player = new Player<V>({
-  delayMs?: number,               // default flushMs + 150
+  delayMs?: number,               // default: automatic, see below
   interpolate?: boolean | ((a: V, b: V, alpha: number) => V), // true = lerp numeric fields, step the rest
   onSample?: (stream, value, time) => void,  // fired once per sample as the playhead passes it, in order
   now?: () => number,
@@ -142,7 +142,7 @@ player.stats()                    // { delayMs, bufferedMs per stream, samplesPe
 - Samples are placed at `batch.start + sample.t` and emitted in order. Batches that arrive late but are still ahead of the playhead play normally. Samples already behind the playhead when they arrive are emitted immediately (so discrete events are never lost) unless they're more than a few seconds old.
 - When a stream runs out of buffer, hold its last value.
 - Start-up: a new player shows each stream's last known value straight away rather than waiting.
-- Keep the core simple first. Adaptive playback speed (Sujay's 0.8x / 1.2x idea) is a nice-to-have once the fixed delay works.
+- Automatic delay (the default): the player measures how long after its first sample each live batch was in its hands, and plays the worst of the last 5 s plus 50 ms behind. That covers the flush window, network time and jitter without being told any of them, and follows a sender that changes its flush rate. It eases towards the target, growing faster (0.2 ms per ms) than it shrinks (0.05), because running dry shows as a stutter. The batches a new subscription delivers in one go don't count, since they were written before anyone was listening. Before any live batch it guesses one window plus 150 ms.
 
 ### History replay
 
@@ -176,3 +176,12 @@ More demos (drawing with timelapse, a tiny game with ghosts) come later in the s
 - Component (convex-test): `seq` increments; `start/end` clamping and the 1 s re-anchor; validation errors; `latest` ordering and `count`; `streams` touch throttling (no patch within 5 s); `history` order and paging without skipping equal `start`s; `expiresAt` cleanup and `clear` in chunks.
 - Sender (fake timers): windows, single-flight, failure retry, `sampleMs` thinning keeps trailing samples and never drops discrete events.
 - Player (injected clock): placement in server time, ordered `onSample`, dedupe by `seq`, late arrivals, hold on starvation, interpolation, offset estimate.
+
+## Decided while building (2026-10-19)
+
+- `history` returns `{ batches, next }`; pass `next` back as `after`. The cursor is `{ start, creationTime, seq }`, so batches that share a `start` aren't skipped. No convex-helpers dependency.
+- `Sender.push(value, { keep: true })` marks discrete events that `sampleMs` thinning must never drop.
+- `Player` dedupes by batch `_id`, not `seq`, because `seq` restarts after `clear`.
+- `exposeApi` doesn't expose `clear`. It's destructive, so it's only on the `BatchedReplay` class.
+- The React hooks key their subscriptions on `getFunctionName(...)`, because `api.x.y` is a new object every render and `useQueries` resubscribes (and loops) on a new input object.
+- The automatic delay replaced "flushMs + 150". Measured headless with a 60 Hz sender on the local backend: 250 ms flush plays 330 ms behind, steady, at 3.9 writes/s; 1 s flush plays 1,080 ms behind, steady; a 50 ms flush (18 writes/s) plays 540 to 765 ms behind, because batches start queueing.

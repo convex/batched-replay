@@ -8,8 +8,10 @@
  * @module
  */
 
-import type * as http from "../http.js";
-import type * as lib from "../lib.js";
+import type * as batches from "../batches.js";
+import type * as crons from "../crons.js";
+import type * as shared from "../shared.js";
+import type * as streams from "../streams.js";
 
 import type {
   ApiFromModules,
@@ -19,8 +21,10 @@ import type {
 import { anyApi, componentsGeneric } from "convex/server";
 
 const fullApi: ApiFromModules<{
-  http: typeof http;
-  lib: typeof lib;
+  batches: typeof batches;
+  crons: typeof crons;
+  shared: typeof shared;
+  streams: typeof streams;
 }> = anyApi as any;
 
 /**

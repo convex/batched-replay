@@ -23,32 +23,76 @@ import type { FunctionReference } from "convex/server";
  */
 export type ComponentApi<Name extends string | undefined = string | undefined> =
   {
-    lib: {
-      add: FunctionReference<
+    batches: {
+      append: FunctionReference<
         "mutation",
         "internal",
-        { targetId: string; text: string; userId: string },
-        string,
+        {
+          duration: number;
+          retentionMs?: number;
+          room: string;
+          samples: Array<{ t: number; v: any }>;
+          stream: string;
+        },
+        { end: number; seq: number; start: number },
+        Name
+      >;
+      history: FunctionReference<
+        "query",
+        "internal",
+        {
+          after?: { creationTime: number; seq: number; start: number };
+          limit?: number;
+          room: string;
+          stream?: string;
+        },
+        {
+          batches: Array<{
+            _creationTime: number;
+            _id: string;
+            end: number;
+            expiresAt?: number;
+            room: string;
+            samples: Array<{ t: number; v: any }>;
+            seq: number;
+            start: number;
+            stream: string;
+          }>;
+          next: { creationTime: number; seq: number; start: number } | null;
+        },
+        Name
+      >;
+      latest: FunctionReference<
+        "query",
+        "internal",
+        { count?: number; room: string; stream: string },
+        Array<{
+          _creationTime: number;
+          _id: string;
+          end: number;
+          expiresAt?: number;
+          room: string;
+          samples: Array<{ t: number; v: any }>;
+          seq: number;
+          start: number;
+          stream: string;
+        }>,
+        Name
+      >;
+    };
+    streams: {
+      clear: FunctionReference<
+        "mutation",
+        "internal",
+        { room: string; stream?: string },
+        null,
         Name
       >;
       list: FunctionReference<
         "query",
         "internal",
-        { limit?: number; targetId: string },
-        Array<{
-          _creationTime: number;
-          _id: string;
-          targetId: string;
-          text: string;
-          userId: string;
-        }>,
-        Name
-      >;
-      translate: FunctionReference<
-        "action",
-        "internal",
-        { baseUrl: string; commentId: string },
-        string,
+        { room: string },
+        Array<{ firstStart: number; lastEnd: number; stream: string }>,
         Name
       >;
     };

@@ -1,7 +1,7 @@
 import { defineApp } from "convex/server";
-import replay from "@convex-dev/replay/convex.config.js";
+import batchedReplay from "@convex-dev/batched-replay/convex.config.js";
 
 const app = defineApp();
-app.use(replay, { httpPrefix: "/comments/" });
+app.use(batchedReplay);
 
 export default app;

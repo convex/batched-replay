@@ -1,202 +1,94 @@
 import "./App.css";
-import { useAction, useMutation, useQuery } from "convex/react";
+import { useEffect, useState } from "react";
+import { usePlayback, useSender } from "@convex-dev/batched-replay/react";
 import { api } from "../convex/_generated/api";
-import { useState } from "react";
 
-// Fake blog posts (not in database)
-const blogPosts = [
-  {
-    id: "blog-post-1",
-    title: "Getting Started with Convex Components",
-    content:
-      "Convex components are a powerful way to build reusable functionality that can be shared across different applications. In this post, we'll explore how to create and use components in your Convex applications.",
-    author: "Jane Doe",
-    date: "2024-01-15",
-  },
-  {
-    id: "blog-post-2",
-    title: "Building Scalable Comment Systems",
-    content:
-      "Comments are a fundamental feature of many web applications. Learn how to build a scalable comment system using Convex components that can handle thousands of comments efficiently.",
-    author: "John Smith",
-    date: "2024-01-20",
-  },
-];
+const ROOM = "cursors-demo";
+type Point = { x: number; y: number };
 
-function BlogPostComments({ postId }: { postId: string }) {
-  const comments = useQuery(api.example.list, { targetId: postId });
-  const addComment = useMutation(api.example.add);
-  const translateComment = useAction(api.example.translateComment);
-  const [commentText, setCommentText] = useState("");
-
-  const handleAddComment = () => {
-    if (commentText.trim()) {
-      addComment({ text: commentText, targetId: postId });
-      setCommentText("");
-    }
-  };
-
-  const handleTranslateComment = async (commentId: string) => {
-    await translateComment({ commentId });
-  };
-
-  return (
-    <div
-      style={{
-        marginTop: "1.5rem",
-        padding: "1rem",
-        border: "1px solid rgba(128, 128, 128, 0.3)",
-        borderRadius: "8px",
-      }}
-    >
-      <h4 style={{ marginTop: 0, marginBottom: "1rem" }}>
-        Comments ({comments?.length ?? 0})
-      </h4>
-      <div style={{ marginBottom: "1rem" }}>
-        <input
-          type="text"
-          value={commentText}
-          onChange={(e) => setCommentText(e.target.value)}
-          placeholder="Enter a comment"
-          style={{ marginRight: "0.5rem", padding: "0.5rem", width: "70%" }}
-          onKeyPress={(e) => e.key === "Enter" && handleAddComment()}
-        />
-        <button onClick={handleAddComment}>Add Comment</button>
-      </div>
-      <ul style={{ textAlign: "left", listStyle: "none", padding: 0 }}>
-        {comments?.map((comment) => (
-          <li
-            key={comment._id}
-            style={{
-              marginBottom: "0.5rem",
-              display: "flex",
-              alignItems: "center",
-              gap: "0.5rem",
-              padding: "0.5rem",
-              backgroundColor: "rgba(128, 128, 128, 0.1)",
-              borderRadius: "4px",
-            }}
-          >
-            <span style={{ flex: 1 }}>{comment.text}</span>
-            <button
-              onClick={() => handleTranslateComment(comment._id)}
-              style={{
-                padding: "0.25rem 0.5rem",
-                fontSize: "0.75rem",
-                backgroundColor: "#ff9800",
-                color: "white",
-                border: "none",
-                borderRadius: "4px",
-                cursor: "pointer",
-              }}
-            >
-              🏴‍☠️ Translate to Pirate Talk
-            </button>
-          </li>
-        ))}
-        {comments?.length === 0 && (
-          <li
-            style={{ color: "rgba(128, 128, 128, 0.8)", fontStyle: "italic" }}
-          >
-            No comments yet. Be the first to comment!
-          </li>
-        )}
-      </ul>
-    </div>
-  );
+// Anonymous id, kept in sessionStorage: each tab is its own "user" (so two
+// tabs in one browser see each other) and a reload stays the same user.
+function useAnonymousId() {
+  const [id] = useState(() => {
+    const saved = sessionStorage.getItem("cursor-id");
+    if (saved) return saved;
+    const fresh = crypto.randomUUID().slice(0, 8);
+    sessionStorage.setItem("cursor-id", fresh);
+    return fresh;
+  });
+  return id;
 }
 
-function App() {
-  // Construct the HTTP endpoint URL
-  const convexUrl = import.meta.env.VITE_CONVEX_SITE_URL;
+function colorFor(id: string) {
+  let hash = 0;
+  for (const ch of id) hash = (hash * 31 + ch.charCodeAt(0)) % 360;
+  return `hsl(${hash} 80% 60%)`;
+}
+
+export default function App() {
+  const me = useAnonymousId();
+  const [flushMs, setFlushMs] = useState(250);
+  const [mouse, setMouse] = useState<Point>({ x: -100, y: -100 });
+
+  const send = useSender<Point>(api.cursors.append, {
+    room: ROOM,
+    stream: me,
+    flushMs,
+  });
+  const { values, stats } = usePlayback<Point>(api.cursors, {
+    room: ROOM,
+    exclude: me,
+    // No delayMs: it follows the senders' flush rate on its own.
+    interpolate: true,
+  });
+
+  useEffect(() => {
+    const onMove = (e: PointerEvent) => {
+      const point = { x: e.clientX, y: e.clientY };
+      setMouse(point); // your own cursor is drawn locally, with no delay
+      send(point);
+    };
+    window.addEventListener("pointermove", onMove);
+    return () => window.removeEventListener("pointermove", onMove);
+  });
 
   return (
     <>
-      <h1>Example App</h1>
-      <div className="card">
-        {blogPosts.map((post) => (
-          <div
-            key={post.id}
-            style={{
-              marginBottom: "2rem",
-              padding: "1.5rem",
-              border: "1px solid rgba(128, 128, 128, 0.3)",
-              borderRadius: "8px",
-            }}
-          >
-            <h2 style={{ marginTop: 0 }}>{post.title}</h2>
-            <div
-              style={{
-                marginBottom: "0.5rem",
-                color: "rgba(128, 128, 128, 0.8)",
-                fontSize: "0.9rem",
-              }}
-            >
-              By {post.author} • {post.date}
-            </div>
-            <p style={{ lineHeight: "1.6", marginBottom: "1rem" }}>
-              {post.content}
-            </p>
-            <BlogPostComments postId={post.id} />
-          </div>
-        ))}
-        <div
-          style={{
-            marginTop: "1.5rem",
-            padding: "1rem",
-            backgroundColor: "rgba(128, 128, 128, 0.1)",
-            borderRadius: "8px",
-          }}
-        >
-          <h3>HTTP Endpoint Demo</h3>
-          <p style={{ fontSize: "0.9rem", marginBottom: "0.5rem" }}>
-            The component exposes an HTTP endpoint to get the latest comment:
-          </p>
-          <div
-            style={{
-              display: "flex",
-              gap: "0.5rem",
-              flexDirection: "column",
-              justifyContent: "center",
-            }}
-          >
-            {blogPosts.map((post) => {
-              const httpUrl =
-                convexUrl +
-                `/comments/last?targetId=${encodeURIComponent(post.id)}`;
-              return (
-                <a
-                  key={post.id}
-                  href={httpUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  style={{
-                    display: "inline-block",
-                    padding: "0.5rem 1rem",
-                    backgroundColor: "#007bff",
-                    color: "white",
-                    textDecoration: "none",
-                    borderRadius: "4px",
-                    fontSize: "0.9rem",
-                  }}
-                >
-                  {post.title} - HTTP Endpoint
-                </a>
-              );
-            })}
-          </div>
-          <p style={{ fontSize: "0.8rem", color: "#666", marginTop: "0.5rem" }}>
-            See <code>example/convex/http.ts</code> for the HTTP route
-            configuration
-          </p>
+      <div className="hud">
+        <h1>Batched replay: cursors</h1>
+        <div>Open this page in a second tab and move the mouse.</div>
+        <div>
+          You send up to {(1000 / flushMs).toFixed(1)} writes/s while moving
         </div>
-        <p>
-          See <code>example/convex/example.ts</code> for all the ways to use
-          this component
-        </p>
+        <div>You receive {stats.batchesPerSecond.toFixed(1)} batches/s</div>
+        <div>Playing {Math.round(stats.delayMs)} ms behind</div>
+        <label>
+          Flush every {flushMs} ms
+          <br />
+          <input
+            type="range"
+            min={16}
+            max={1000}
+            value={flushMs}
+            onChange={(e) => setFlushMs(Number(e.target.value))}
+          />
+        </label>
       </div>
+      <div
+        className="cursor me"
+        style={{ transform: `translate(${mouse.x}px, ${mouse.y}px)` }}
+      />
+      {[...values].map(([stream, point]) => (
+        <div
+          key={stream}
+          data-stream={stream}
+          className="cursor"
+          style={{
+            background: colorFor(stream),
+            transform: `translate(${point.x}px, ${point.y}px)`,
+          }}
+        />
+      ))}
     </>
   );
 }
-
-export default App;

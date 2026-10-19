@@ -1,0 +1,167 @@
+/// <reference types="vite/client" />
+
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { api } from "./_generated/api.js";
+import { initConvexTest } from "./setup.test.js";
+
+const T0 = 1_000_000;
+const sample = (t: number) => ({ t, v: { x: t } });
+
+function append(
+  t: ReturnType<typeof initConvexTest>,
+  opts: { stream?: string; duration?: number; retentionMs?: number } = {},
+) {
+  const duration = opts.duration ?? 250;
+  return t.mutation(api.batches.append, {
+    room: "r",
+    stream: opts.stream ?? "a",
+    samples: [sample(0), sample(duration)],
+    duration,
+    retentionMs: opts.retentionMs,
+  });
+}
+
+describe("batches.append", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(T0);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  test("seq increments per stream", async () => {
+    const t = initConvexTest();
+    expect((await append(t)).seq).toBe(0);
+    vi.setSystemTime(T0 + 250);
+    expect((await append(t)).seq).toBe(1);
+    expect((await append(t, { stream: "b" })).seq).toBe(0);
+  });
+
+  test("start is now minus duration", async () => {
+    const t = initConvexTest();
+    expect(await append(t)).toEqual({ seq: 0, start: T0 - 250, end: T0 });
+  });
+
+  test("clamps start so a stream never overlaps itself", async () => {
+    const t = initConvexTest();
+    await append(t); // timeline ends at T0
+    vi.setSystemTime(T0 + 100); // arrives early: ideal start T0 - 150
+    const second = await append(t);
+    expect(second.start).toBe(T0);
+    expect(second.end).toBe(T0 + 250);
+  });
+
+  test("re-anchors when clamping would push start more than 1s ahead", async () => {
+    const t = initConvexTest();
+    // Five batches at the same instant each get clamped 250 ms further ahead.
+    const starts = [];
+    for (let i = 0; i < 6; i++) starts.push((await append(t)).start);
+    expect(starts).toEqual([
+      T0 - 250,
+      T0,
+      T0 + 250,
+      T0 + 500,
+      T0 + 750,
+      // Clamping would make this T0 + 1000, which is 1250 ms ahead of
+      // now - duration, so it re-anchors instead.
+      T0 - 250,
+    ]);
+  });
+
+  test("rejects bad input", async () => {
+    const t = initConvexTest();
+    const base = { room: "r", stream: "a", duration: 100 };
+    await expect(
+      t.mutation(api.batches.append, { ...base, samples: [] }),
+    ).rejects.toThrow(/1 to 2000 samples/);
+    await expect(
+      t.mutation(api.batches.append, { ...base, samples: [sample(101)] }),
+    ).rejects.toThrow(/within \[0, duration\]/);
+    await expect(
+      t.mutation(api.batches.append, {
+        ...base,
+        samples: [sample(50), sample(40)],
+      }),
+    ).rejects.toThrow(/non-decreasing/);
+    await expect(
+      t.mutation(api.batches.append, {
+        ...base,
+        duration: 60_001,
+        samples: [sample(0)],
+      }),
+    ).rejects.toThrow(/duration/);
+    await expect(
+      t.mutation(api.batches.append, {
+        ...base,
+        samples: Array.from({ length: 2_001 }, () => sample(0)),
+      }),
+    ).rejects.toThrow(/1 to 2000 samples/);
+  });
+
+  test("sets expiresAt from retentionMs", async () => {
+    const t = initConvexTest();
+    await append(t, { retentionMs: 5_000 });
+    await append(t, { stream: "keep" });
+    const [expiring, kept] = await t.run(async (ctx) => [
+      await ctx.db.query("batches").first(),
+      await ctx.db.query("batches").order("desc").first(),
+    ]);
+    expect(expiring?.expiresAt).toBe(T0 + 5_000);
+    expect(kept?.expiresAt).toBeUndefined();
+  });
+
+  test("touches the stream doc at most every 5s", async () => {
+    const t = initConvexTest();
+    const lastEnd = async () =>
+      (await t.query(api.streams.list, { room: "r" }))[0].lastEnd;
+    await append(t);
+    expect(await lastEnd()).toBe(T0);
+    vi.setSystemTime(T0 + 4_000);
+    await append(t);
+    expect(await lastEnd()).toBe(T0);
+    vi.setSystemTime(T0 + 6_000);
+    await append(t);
+    expect(await lastEnd()).toBe(T0 + 6_000);
+  });
+});
+
+describe("batches.latest", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(T0);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  test("returns the newest batches oldest first, default 3", async () => {
+    const t = initConvexTest();
+    for (let i = 0; i < 5; i++) {
+      vi.setSystemTime(T0 + i * 250);
+      await append(t);
+    }
+    const batches = await t.query(api.batches.latest, {
+      room: "r",
+      stream: "a",
+    });
+    expect(batches.map((b) => b.seq)).toEqual([2, 3, 4]);
+    const two = await t.query(api.batches.latest, {
+      room: "r",
+      stream: "a",
+      count: 2,
+    });
+    expect(two.map((b) => b.seq)).toEqual([3, 4]);
+  });
+
+  test("only returns the asked stream", async () => {
+    const t = initConvexTest();
+    await append(t, { stream: "a" });
+    await append(t, { stream: "b" });
+    const batches = await t.query(api.batches.latest, {
+      room: "r",
+      stream: "b",
+    });
+    expect(batches.map((b) => b.stream)).toEqual(["b"]);
+  });
+});

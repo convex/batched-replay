@@ -1,151 +1,84 @@
-# Convex Component Template
+# @convex-dev/batched-replay
 
-This is a Convex component, ready to be published on npm.
+Realtime-ish data on plain Convex. A sender batches fast-changing values
+(cursors, pen strokes, game movement) into one mutation every ~250 ms; watchers
+replay each batch with its original timing. It looks smooth and live, runs a
+little behind, and costs a handful of writes a second instead of 60. Batches are
+kept, so a whole session can be replayed later.
 
-To create your own component:
-
-1. Write code in src/component for your component. Component-specific tables,
-   queries, mutations, and actions go here.
-1. Write code in src/client for the Class that interfaces with the component.
-   This is the bridge your users will access to get information into and out of
-   your component
-1. Write example usage in example/convex/example.ts.
-1. Delete the text in this readme until `---` and flesh out the README.
-1. Publish to npm with `npm run alpha` or `npm run release`.
-
-To develop your component run a dev process in the example project:
+## Install
 
 ```sh
-npm i
-npm run dev
+npm install @convex-dev/batched-replay
 ```
-
-`npm run dev` will start a file watcher to re-build the component, as well as
-the example project backend, which installs and uses the component. Run
-`npm run dev:frontend` to interact with it through a Vite app.
-
-Modify the schema and index files in src/component/ to define your component.
-
-Write a client for using this component in src/client/index.ts.
-
-Run `npm test` to test the component, its client, and the example application.
-
-If you won't be adding frontend code (e.g. React components) to this component
-you can delete "./react" references in package.json and "src/react/" directory.
-If you will be adding frontend code, add a peer dependency on React in
-package.json.
-
-### Component Directory structure
-
-```
-.
-├── README.md           documentation of your component
-├── package.json        component name, version number, other metadata
-├── package-lock.json   Components are like libraries, package-lock.json
-│                       is .gitignored and ignored by consumers.
-├── src
-│   ├── component/
-│   │   ├── _generated/ Files here are generated for the component.
-│   │   ├── convex.config.ts  Name your component here and use other components
-│   │   ├── lib.ts    Define functions here. If you add more modules, name
-│   │   │             each after the object it deals with (e.g. jobs.ts,
-│   │   │             messages.ts): apps call them as
-│   │   │             components.<name>.<module>.<fn>.
-│   │   └── schema.ts   schema specific to this component
-│   ├── client/
-│   │   └── index.ts    Code that needs to run in the app that uses the
-│   │                   component. Generally the app interacts directly with
-│   │                   the component's exposed API (src/component/*).
-│   └── react/          Code intended to be used on the frontend goes here.
-│       │               Your are free to delete this if this component
-│       │               does not provide code.
-│       └── index.ts
-├── example/            example Convex app that uses this component
-│   └── convex/
-│       ├── _generated/       Files here are generated for the example app.
-│       ├── convex.config.ts  Imports and uses this component
-│       ├── myFunctions.ts    Functions that use the component
-│       └── schema.ts         Example app schema
-└── dist/               Publishing artifacts will be created here.
-```
-
----
-
-# Convex Replay
-
-[![npm version](https://badge.fury.io/js/@example%2Freplay.svg)](https://badge.fury.io/js/@example%2Freplay)
-
-<!-- START: Include on https://convex.dev/components -->
-
-- [ ] What is some compelling syntax as a hook?
-- [ ] Why should you use this component?
-- [ ] Links to docs / other resources?
-
-Found a bug? Feature request?
-[File it here](https://github.com/get-convex/replay/issues).
-
-## Installation
-
-Create a `convex.config.ts` file in your app's `convex/` folder and install the
-component by calling `use`:
 
 ```ts
 // convex/convex.config.ts
 import { defineApp } from "convex/server";
-import replay from "@convex-dev/replay/convex.config.js";
+import batchedReplay from "@convex-dev/batched-replay/convex.config.js";
 
 const app = defineApp();
-app.use(replay);
-
+app.use(batchedReplay);
 export default app;
 ```
 
-## Usage
+## Expose an API
 
 ```ts
+// convex/cursors.ts
 import { components } from "./_generated/api";
+import { exposeApi } from "@convex-dev/batched-replay";
 
-export const addComment = mutation({
-  args: { text: v.string(), targetId: v.string() },
-  handler: async (ctx, args) => {
-    return await ctx.runMutation(components.replay.lib.add, {
-      text: args.text,
-      targetId: args.targetId,
-      userId: await getAuthUserId(ctx),
-    });
+export const { append, latest, history, streams } = exposeApi(
+  components.batchedReplay,
+  {
+    retentionMs: 10 * 60_000, // omit to keep batches forever
+    auth: async (ctx, op) => {
+      const identity = await ctx.auth.getUserIdentity();
+      if (!identity) throw new Error("Unauthorized");
+      // For writes, return the stream key this caller may write to.
+      if (op.type === "write") return identity.tokenIdentifier;
+    },
   },
-});
+);
 ```
 
-See more example usage in [example.ts](./example/convex/example.ts).
+A room is a string you pick, a stream is one sender's key inside it. From your
+own functions you can also use `new BatchedReplay<V>(components.batchedReplay)`.
 
-### HTTP Routes
+## Send, play back, replay
 
-You can register HTTP routes for the component to expose HTTP endpoints:
+```tsx
+import { useSender, usePlayback, useHistory } from "@convex-dev/batched-replay/react";
 
-```ts
-import { httpRouter } from "convex/server";
-import { registerRoutes } from "@convex-dev/replay";
-import { components } from "./_generated/api";
+// Send: batched and flushed every flushMs, and on unmount / pagehide.
+const send = useSender(api.cursors.append, { room, stream: me, flushMs: 250 });
+onPointerMove((e) => send({ x: e.clientX, y: e.clientY }));
+// Discrete events are never thinned out by sampleMs: send(v, { keep: true })
 
-const http = httpRouter();
-
-registerRoutes(http, components.replay, {
-  pathPrefix: "/comments",
+// Watch everyone else, slightly behind live. Draw your own input locally.
+const { values, stats } = usePlayback(api.cursors, {
+  room,
+  exclude: me,
+  interpolate: true,
 });
 
-export default http;
+// Replay stored batches later, at any speed (Infinity = as fast as it loads).
+const replay = useHistory(api.cursors, { room, speed: 10, onSample: draw });
+replay.play(); // also pause(), seek(ms), setSpeed(n)
 ```
 
-This will expose a GET endpoint that returns the most recent comment as JSON.
-The endpoint requires a `targetId` query parameter. See
-[http.ts](./example/convex/http.ts) for a complete example.
+The `Sender`, `Player` and `HistoryPlayer` classes behind the hooks are plain
+TypeScript, exported from `@convex-dev/batched-replay`, if you're not using React.
 
-<!-- END: Include on https://convex.dev/components -->
+## Example
 
-Run the example:
+`example/` is a cursors demo: open it in two tabs and move the mouse. A slider
+sets `flushMs` so you can compare smooth-but-behind with jumpy-and-expensive.
 
 ```sh
-npm i
 npm run dev
+npm run dev:frontend
 ```
+
+See `DESIGN.md` for how it works.
