@@ -1,90 +1,95 @@
 # Publishing
 
-In order for other people to install and use this component, you can publish the
-package to npm.
+Releases are published to npm by GitHub Actions when a version tag is pushed
+(`.github/workflows/publish.yml`). It authenticates with
+[npm Trusted Publishing](https://docs.npmjs.com/trusted-publishers), so there's
+no npm token stored anywhere, and npm adds a provenance statement linking each
+version to the commit and workflow run that built it (for a public repo).
 
-You will first need to have an npmjs account with permissions to push to your
-package name.
+## One-time setup
 
-If this is your first time, here are the recommended steps:
+npm only lets you set up Trusted Publishing on a package that already exists, so
+the very first version is published by hand.
 
-1. Ensure the package.json "name" matches what you want it to be called. It
-   should either be like `my-package` or `@my-org/my-package`. If it's the
-   latter, ensure you have an npmjs account with permissions to push to
-   `my-org`.
-2. `npm login` to login to npmjs.
-3. `npm ci` to install the dependencies with the versions specified in
-   `package-lock.json`.
-4. `npm run build:clean` to delete `/dist` and build the package fresh.
-5. (Optional) `npm pack --dry-run` to list the files that will be published.
-6. (Optional) `npm run typecheck` to typecheck the package.
-7. (Optional) `npm run lint` to lint the package.
-8. (Optional) `npm run test` to test the package.
-9. (Optional) `npm pack` will create a .tgz file of the package. You can then
-   try installing it in another project with
-   `npm install ./path/to/your-package.tgz` to sanity check that it works as
-   expected. You can remove the .tgz file after.
-10. `npm publish --access public` to publish the package to npm. Do the first
-    publish by hand like this, not with `npm run release`: `release` bumps the
-    patch version first, so it would publish 0.1.1 instead of 0.1.0. A scoped
-    package also needs `--access public` the first time.
-11. `git tag v0.1.0` to tag the new version.
-12. `git push --follow-tags` to push the tags to the repository. This way, other
-    contributors can always see what code was published with each version.
-    Running `npm version ...` will create these tags and commits automatically.
+1. Make the GitHub repo public (provenance and the components directory both
+   need it).
+2. Publish 0.1.0 from a clean checkout of `main`, as someone with publish rights
+   on the `@convex-dev` npm scope:
 
-After the initial publish, you can use the release scripts documented below,
-which will do steps 3-12 automatically (except the sanity check in step 9).
+   ```sh
+   npm login
+   npm ci
+   npm publish --access public
+   ```
 
-## Package scripts for releasing
+   `prepublishOnly` makes a clean build first. Don't use `npm run release` for
+   this one: it bumps the version first, so it would publish 0.1.1.
 
-In package.json, there are some scripts that are useful for doing releases.
+3. Tag it, so the repo records what was published:
 
-- `preversion` will run the tests and typecheck the code before marking a new
-  version.
-- `version` will open the changelog in vim and then save it before committing
-  the new version.
-- `prepublishOnly` (`npm run build:clean`) will make a clean build of the
-  package before publishing.
+   ```sh
+   git tag v0.1.0
+   git push origin v0.1.0
+   ```
 
-These are not required and can be modified or removed if desired. They will all
-be run automatically when using one of the deployment commands.
+   The publish workflow runs, sees 0.1.0 is already on npm, and stops without
+   publishing.
 
-## Deploying a new alpha version
+4. On npmjs.com, open `@convex-dev/batched-replay`, go to **Settings**, and
+   under **Trusted Publisher** choose **GitHub Actions** with:
+   - Organization or user: `convex`
+   - Repository: `batched-replay`
+   - Workflow filename: `publish.yml`
+   - Environment: leave blank
+
+5. Optional but recommended: in the same settings, under **Publishing access**,
+   choose "Require two-factor authentication and disallow tokens", so only the
+   workflow (or a person with 2FA) can publish.
+
+## Releasing a new version
+
+From an up-to-date `main`:
 
 ```sh
-npm run alpha
+npm run release   # patch: 0.1.0 -> 0.1.1
 ```
 
-This will create a prerelease version with an `@alpha` tag. It will then publish
-the package to npm and push the code and new tag. Users can install the package
-with `npm install @your-package@alpha`.
-
-## Deploying a new release version
-
-```sh
-npm run release
-```
-
-This will create a patch version and publish as `latest`. It will then publish
-the package to npm and push the code and new tag. To publish a new minor or
-major version, you can run the commands manually:
+For a minor or major version:
 
 ```sh
 npm version minor # or major
-npm publish
 git push --follow-tags
 ```
 
-## Building a one-off package
+For a prerelease, published under the `alpha` dist-tag rather than `latest`:
 
 ```sh
-npm run build:clean
-npm pack
+npm run alpha     # 0.1.1 -> 0.1.2-alpha.0
 ```
 
-You can then provide the .tgz file to others to install via
-`npm install ./path/to/your-package.tgz`.
+Users install those with `npm install @convex-dev/batched-replay@alpha`.
+
+Each of these runs the `preversion` checks (a clean install, build with codegen,
+tests, lint and typecheck), opens CHANGELOG.md in vim for the release notes (the
+`version` script), commits, tags and pushes. The pushed tag starts the publish
+workflow, which checks the tag matches `package.json`, builds, tests, typechecks
+and lints again, then publishes. Watch it in the repo's Actions tab.
+
+## Before a release
+
+- `npm pack --dry-run` lists exactly what will be published (`dist`, `src`
+  without tests, README, LICENSE and CHANGELOG).
+- To try the package somewhere else first: `npm pack`, then
+  `npm install ./convex-dev-batched-replay-<version>.tgz` in another project.
+
+## Publishing by hand (if CI is down)
+
+```sh
+npm login
+npm ci
+npm publish --access public   # add --tag alpha for a prerelease
+git push --follow-tags
+```
 
 ## The README's demo GIF
 

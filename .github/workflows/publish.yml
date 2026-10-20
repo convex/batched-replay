@@ -1,0 +1,73 @@
+name: Publish to npm
+
+# Push a version tag (npm run release, or npm version ... && git push
+# --follow-tags) and this publishes that version. It authenticates with npm
+# Trusted Publishing (OIDC), so there's no npm token stored anywhere. See
+# PUBLISHING.md for the one-time setup.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: Publish to npm
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write # npm Trusted Publishing (OIDC) and provenance
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Node setup
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: "24.x"
+          registry-url: "https://registry.npmjs.org"
+
+      # Trusted Publishing needs npm 11.5.1 or later.
+      - name: Update npm
+        run: npm install -g npm@^11.5.1
+
+      - name: Check the tag and whether this version is already out
+        id: version
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          if [ "${TAG#v}" != "$VERSION" ]; then
+            echo "::error::Tag $TAG doesn't match package.json version $VERSION"
+            exit 1
+          fi
+          if npm view "@convex-dev/batched-replay@$VERSION" version > /dev/null 2>&1; then
+            echo "::notice::$VERSION is already on npm, so there's nothing to publish"
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          fi
+          # Prereleases (0.2.0-alpha.0) go out under the alpha tag, not latest.
+          case "$VERSION" in
+            *-*) echo "dist_tag=alpha" >> "$GITHUB_OUTPUT" ;;
+            *) echo "dist_tag=latest" >> "$GITHUB_OUTPUT" ;;
+          esac
+
+      - name: Install, build, test, typecheck and lint
+        if: steps.version.outputs.publish == 'true'
+        run: |
+          npm ci
+          npm run build
+          npm run test
+          npm run typecheck
+          npm run lint
+
+      - name: Publish
+        if: steps.version.outputs.publish == 'true'
+        env:
+          DIST_TAG: ${{ steps.version.outputs.dist_tag }}
+        run: npm publish --access public --tag "$DIST_TAG"
