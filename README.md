@@ -13,6 +13,10 @@ Found a bug? Feature request?
 
 <!-- START: Include on https://convex.dev/components -->
 
+![Two tabs: tab A draws a smiley, tab B replays each stroke about 300 ms behind, and both Strokes sidebars fill in from onAppend](docs/drawing-demo.gif)
+
+The example's drawing board in two tabs, from about 4 writes a second.
+
 ## Install
 
 ```sh
