@@ -1,4 +1,4 @@
-import { describe, expect, expectTypeOf, test } from "vitest";
+import { describe, expect, expectTypeOf, test, vi } from "vitest";
 import { defineTestApp } from "convex-test";
 import { exposeApi } from "./index.js";
 import {
@@ -47,6 +47,12 @@ const { api, createTest } = app.defineModules({
     },
   }),
   untyped: exposeApi(app.components.batchedReplay, {
+    authorizeRead: async () => {},
+    authorizeWrite: async (_ctx, { stream }) => stream ?? "anon",
+  }),
+  big: exposeApi(app.components.batchedReplay, {
+    value: v.object({ x: v.number() }),
+    feed: true,
     authorizeRead: async () => {},
     authorizeWrite: async (_ctx, { stream }) => stream ?? "anon",
   }),
@@ -136,6 +142,39 @@ describe("exposeApi", () => {
     type History = typeof api.cursors.history;
     expectTypeOf<
       History["_returnType"]["batches"][number]["samples"][number]["v"]
+    >().toEqualTypeOf<{ x: number }>();
+  });
+
+  test("feed: true adds the room feed, and append writes to it", async () => {
+    vi.useFakeTimers();
+    try {
+      const t = createTest();
+      await t.mutation(api.big.append, {
+        room: "r",
+        stream: "a",
+        samples,
+        duration: 100,
+      });
+      // Run the room's worker a tick at a time until it goes idle.
+      await t.finishAllScheduledFunctions(
+        () => vi.advanceTimersByTime(100),
+        1_000,
+      );
+      const [frame] = await t.query(api.big.feed, { room: "r" });
+      expect(frame.batches.map((b) => [b.stream, b.samples])).toEqual([
+        ["a", samples],
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("without feed: true there's no feed query", () => {
+    expectTypeOf(api.untyped).not.toHaveProperty("feed");
+    expect(api.untyped).not.toHaveProperty("feed");
+    type Feed = typeof api.big.feed;
+    expectTypeOf<
+      Feed["_returnType"][number]["batches"][number]["samples"][number]["v"]
     >().toEqualTypeOf<{ x: number }>();
   });
 });

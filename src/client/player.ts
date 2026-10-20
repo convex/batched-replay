@@ -141,6 +141,31 @@ export class Player<V> {
   }
 
   /**
+   * Feed a frame of the room's feed: batches from many streams, in commit
+   * order. Each goes to its stream as if from `latest`, except that a stream
+   * is live from the moment it first appears in a frame. Only pass
+   * `snapshot: true` for the first result, written before we were listening.
+   */
+  ingestFrame(
+    batches: (PlayerBatch<V> & { stream: string })[],
+    options: { snapshot?: boolean } = {},
+  ) {
+    const byStream = new Map<string, PlayerBatch<V>[]>();
+    for (const batch of batches) {
+      byStream.set(batch.stream, [
+        ...(byStream.get(batch.stream) ?? []),
+        batch,
+      ]);
+    }
+    for (const [stream, streamBatches] of byStream) {
+      const state = this.stateFor(stream);
+      const kind = options.snapshot && !state.subscribed ? "snapshot" : "live";
+      state.subscribed = true;
+      this.take(stream, state, streamBatches, kind);
+    }
+  }
+
+  /**
    * Emits stored batches straight away, in order (pages of the `history`
    * query, for "history, then live"). Each stream then carries on from the
    * last batch here, so live batches skip what's been played and fill gaps.

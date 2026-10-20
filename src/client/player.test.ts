@@ -539,6 +539,69 @@ describe("Player", () => {
     });
   });
 
+  describe("feed frames", () => {
+    const framed = (b: PlayerBatch<P>, stream: string) => ({ ...b, stream });
+
+    test("splits a frame by stream and plays each in order", () => {
+      const t = setup();
+      t.player.ingestFrame([], { snapshot: true });
+      const base = t.server();
+      t.player.ingestFrame([
+        framed(batch(base, one(1), { stream: "a" }), "a"),
+        framed(batch(base, one(10), { stream: "b" }), "b"),
+        framed(batch(base + 250, one(2), { stream: "a" }), "a"),
+      ]);
+      t.advance(1_000);
+      t.player.tick();
+      expect(t.played.map(([stream, v]) => [stream, v.x])).toEqual([
+        ["a", 1],
+        ["a", 2],
+        ["b", 10],
+      ]);
+      expect(t.player.playhead()).toBeDefined(); // they were live
+    });
+
+    test("only the first result is a snapshot", () => {
+      const t = setup();
+      // Written long before we were listening: shown, not played.
+      t.player.ingestFrame(
+        [framed(batch(t.server() - 30_000, one(1), { stream: "a" }), "a")],
+        { snapshot: true },
+      );
+      expect(t.player.playhead()).toBeUndefined();
+      expect(t.player.value("a")).toEqual(at(1));
+      // A stream that first turns up in a later frame is live straight away.
+      t.player.ingestFrame([
+        framed(batch(t.server(), one(5), { stream: "b" }), "b"),
+      ]);
+      t.advance(1_000);
+      t.player.tick();
+      expect(t.played.map(([stream, v]) => [stream, v.x])).toEqual([["b", 5]]);
+    });
+
+    test("ignores batches it has already had, and fills a missed frame", async () => {
+      let release: (batches: PlayerBatch<P>[]) => void = () => {};
+      const fetchAfter = vi.fn(
+        () => new Promise<PlayerBatch<P>[]>((r) => (release = r)),
+      );
+      const t = setup({ fetchAfter });
+      t.player.ingestFrame([], { snapshot: true });
+      const base = t.server();
+      const b0 = framed(batch(base, one(0), { seq: 0 }), "a");
+      const b1 = framed(batch(base + 250, one(1), { seq: 1 }), "a");
+      const b2 = framed(batch(base + 500, one(2), { seq: 2 }), "a");
+      t.player.ingestFrame([b0]);
+      t.player.ingestFrame([b0]); // the same frame again
+      t.player.ingestFrame([b2]); // the frame holding b1 was missed
+      expect(fetchAfter).toHaveBeenCalledWith("a", 0);
+      release([b1, b2]); // from the stream's history
+      await Promise.resolve();
+      t.advance(1_000);
+      t.player.tick();
+      expect(t.xs()).toEqual([0, 1, 2]);
+    });
+  });
+
   test("reset drops everything buffered and keeps the clock", () => {
     const t = setup();
     t.subscribe();

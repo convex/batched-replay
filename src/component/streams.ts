@@ -109,10 +109,34 @@ export const clearChunk = internalMutation({
       });
       return null;
     }
+    // The feed's frames hold copies of the batches, so they go too.
+    if (!(await deleteFrames(ctx, room))) {
+      await ctx.scheduler.runAfter(0, internal.streams.clearChunk, {
+        room,
+        stream,
+        before,
+        afterStream: streamDocs.at(-1)?.stream ?? afterStream,
+      });
+      return null;
+    }
     await bumpEpoch(ctx, room);
     return null;
   },
 });
+
+// Deletes a chunk of the room's feed frames. True once they're all gone.
+async function deleteFrames(ctx: MutationCtx, room: string) {
+  const frames = ctx.db
+    .query("frames")
+    .withIndex("by_room", (q) => q.eq("room", room));
+  let deleted = 0;
+  for await (const frame of frames) {
+    if (deleted === CHUNK || (await nearReadLimit(ctx))) return false;
+    await ctx.db.delete("frames", frame._id);
+    deleted++;
+  }
+  return true;
+}
 
 async function markCleared(ctx: MutationCtx, room: string, clearedAt: number) {
   const doc = await ctx.db

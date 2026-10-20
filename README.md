@@ -172,12 +172,52 @@ React.
   samples a second is roughly 5 MB an hour. Keep forever only what you'll
   replay, like drawings.
 
+## Big rooms: the feed
+
+By default each viewer subscribes to `latest` once per other person, so a room
+of N people has N x (N-1) subscriptions, and every append re-runs a query for
+everyone else. That's simplest and quickest, and fine for small rooms. A local
+load test saturated at about 50 people moving at once.
+
+For bigger rooms, switch on the feed. Each append then pings a
+[Batch Worker](https://www.convex.dev/components/batch-worker) loop for its
+room, which every 100 ms copies the room's new batches into one "frame". Viewers
+subscribe to the room's newest frame once: N subscriptions instead of N x (N-1),
+and about 10 query re-runs a second per room however many people are in it.
+
+```ts
+// convex/cursors.ts
+export const { append, latest, history, streams, feed } = exposeApi(
+  components.batchedReplay,
+  { value, feed: true, authorizeRead, authorizeWrite },
+);
+```
+
+```tsx
+usePlayback(api.cursors, { room, self: tabId, feed: true });
+```
+
+What it costs:
+
+- **Each batch is written twice**, once as a batch and once in a frame, plus the
+  worker's own mutation every tick while the room is busy.
+- **Up to one tick (100 ms) more delay.** The automatic delay picks it up on its
+  own.
+- Bytes per viewer stay about the same: everyone still needs everyone's samples.
+
+Everything else works the same: `fromStart`, `onReset`, `self`, gap filling (a
+missed frame shows up as a gap in a stream and is fetched from `history`).
+People who aren't moving when you join are fetched once each, so they still
+show. Frames are kept for a few seconds, and the stored batches are untouched,
+so `history` and `useHistory` don't change.
+
 ## Example
 
 `example/` has two demos, switched by `#cursors` and `#drawing`. Cursors: open
 it in two tabs and move the mouse; a slider sets `flushMs` so you can compare
-smooth-but-behind with jumpy-and-expensive. Drawing: a shared board where
-everyone else's strokes replay at the speed they were drawn, with a timelapse.
+smooth-but-behind with jumpy-and-expensive. Add `?feed` to the URL to use the
+room feed instead. Drawing: a shared board where everyone else's strokes replay
+at the speed they were drawn, with a timelapse.
 
 ```sh
 npm run dev

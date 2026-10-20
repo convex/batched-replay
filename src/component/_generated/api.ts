@@ -10,6 +10,7 @@
 
 import type * as batches from "../batches.js";
 import type * as crons from "../crons.js";
+import type * as feed from "../feed.js";
 import type * as shared from "../shared.js";
 import type * as streams from "../streams.js";
 
@@ -23,6 +24,7 @@ import { anyApi, componentsGeneric } from "convex/server";
 const fullApi: ApiFromModules<{
   batches: typeof batches;
   crons: typeof crons;
+  feed: typeof feed;
   shared: typeof shared;
   streams: typeof streams;
 }> = anyApi as any;
@@ -53,4 +55,6 @@ export const internal: FilterApi<
   FunctionReference<any, "internal">
 > = anyApi as any;
 
-export const components = componentsGeneric() as unknown as {};
+export const components = componentsGeneric() as unknown as {
+  batchWorker: import("@convex-dev/batch-worker/_generated/component.js").ComponentApi<"batchWorker">;
+};

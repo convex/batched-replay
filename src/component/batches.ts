@@ -1,5 +1,7 @@
 import { v } from "convex/values";
+import type { Doc } from "./_generated/dataModel.js";
 import { mutation, query, type QueryCtx } from "./_generated/server.js";
+import { pingFeed } from "./feed.js";
 import { sampleValidator } from "./schema.js";
 import {
   MAX_CLAMP_MS,
@@ -18,6 +20,8 @@ export const append = mutation({
     samples: v.array(sampleValidator),
     duration: v.number(),
     retentionMs: v.optional(v.number()),
+    // Also copy the batch into the room feed (see feed.ts).
+    feed: v.optional(v.boolean()),
   },
   // Null when every sample was captured before the room was last cleared.
   returns: v.union(
@@ -68,7 +72,9 @@ export const append = mutation({
       end,
       samples,
       expiresAt,
+      committed: ctx.db.vars.commitTs,
     });
+    if (args.feed) await pingFeed(ctx, args.room);
 
     const streamDoc = await ctx.db
       .query("streams")
@@ -102,7 +108,7 @@ export const latest = query({
       )
       .order("desc")
       .take(count);
-    return newestFirst.reverse();
+    return newestFirst.reverse().map(withoutCommitted);
   },
 });
 
@@ -126,7 +132,7 @@ export const history = query({
       batches.push(batch);
       if (batches.length > limit) break;
     }
-    const page = batches.slice(0, limit);
+    const page = batches.slice(0, limit).map(withoutCommitted);
     const last = page[page.length - 1];
     return {
       batches: page,
@@ -141,6 +147,11 @@ export const history = query({
     };
   },
 });
+
+// The commit timestamp is only for the feed, so batches go out as before.
+function withoutCommitted({ committed: _, ...batch }: Doc<"batches">) {
+  return batch;
+}
 
 // One stream: seq order is timeline order, so seq is a complete cursor.
 function streamRows(

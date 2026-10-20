@@ -3,7 +3,10 @@ import { usePlayback, useSender } from "@convex-dev/batched-replay/react";
 import { api } from "../convex/_generated/api";
 import { colorFor, useAnonymousId } from "./anonymous";
 
-const ROOM = "cursors-demo";
+// Open with ?feed to try the room feed, for big rooms. It's its own room.
+const FEED = new URLSearchParams(location.search).has("feed");
+const ROOM = FEED ? "cursors-feed-demo" : "cursors-demo";
+const cursorsApi = FEED ? api.cursorsFeed : api.cursors;
 type Point = { x: number; y: number };
 
 export default function Cursors() {
@@ -11,14 +14,15 @@ export default function Cursors() {
   const [flushMs, setFlushMs] = useState(250);
   const [mouse, setMouse] = useState<Point>({ x: -100, y: -100 });
 
-  const send = useSender(api.cursors.append, {
+  const send = useSender(cursorsApi.append, {
     room: ROOM,
     stream: me,
     flushMs,
   });
-  const { values, stats } = usePlayback(api.cursors, {
+  const { values, stats } = usePlayback(cursorsApi, {
     room: ROOM,
     self: me,
+    feed: FEED,
     // No delayMs: it follows the senders' flush rate on its own.
     interpolate: true,
   });

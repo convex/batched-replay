@@ -11,6 +11,7 @@ import type { ComponentApi } from "../component/_generated/component.js";
 import {
   batchValidatorFor,
   cursorValidator,
+  frameValidatorFor,
   historyPageValidatorFor,
   streamListValidator,
 } from "../component/shared.js";
@@ -29,6 +30,14 @@ export type Batch<V> = Omit<History["batches"][number], "samples"> & {
   samples: Sample<V>[];
 };
 export type StreamList = ComponentApi["streams"]["list"]["_returnType"];
+type FeedFrame = ComponentApi["feed"]["latest"]["_returnType"][number];
+/** One frame of a room's feed: copies of the batches one tick picked up. */
+export type Frame<V> = {
+  seq: number;
+  batches: (Omit<FeedFrame["batches"][number], "samples"> & {
+    samples: Sample<V>[];
+  })[];
+};
 
 /**
  * Use from your own queries and mutations. `V` is the shape of one sample's
@@ -37,7 +46,7 @@ export type StreamList = ComponentApi["streams"]["list"]["_returnType"];
 export class BatchedReplay<V = unknown> {
   constructor(
     private component: ComponentApi,
-    private options: { retentionMs?: number } = {},
+    private options: { retentionMs?: number; feed?: boolean } = {},
   ) {}
 
   append(
@@ -52,6 +61,7 @@ export class BatchedReplay<V = unknown> {
     return ctx.runMutation(this.component.batches.append, {
       ...args,
       retentionMs: this.options.retentionMs,
+      feed: this.options.feed,
     });
   }
 
@@ -74,6 +84,11 @@ export class BatchedReplay<V = unknown> {
     return ctx.runQuery(this.component.batches.history, args);
   }
 
+  /** The room feed's newest frames, newest first. Needs `feed: true`. */
+  feed(ctx: QueryCtx, args: { room: string; count?: number }) {
+    return ctx.runQuery(this.component.feed.latest, args);
+  }
+
   /** The room's most recently active streams, newest first, and its epoch. */
   streams(ctx: QueryCtx, args: { room: string; limit?: number }) {
     return ctx.runQuery(this.component.streams.list, args);
@@ -91,6 +106,7 @@ export class BatchedReplay<V = unknown> {
 export type ExposeApiOptions<
   Value,
   DataModel extends GenericDataModel = GenericDataModel,
+  Feed extends boolean = boolean,
 > = {
   /**
    * Validates each sample's value on `append`, e.g.
@@ -100,6 +116,13 @@ export type ExposeApiOptions<
   value?: Value;
   /** How long batches are kept after they end. Default: forever. */
   retentionMs?: number;
+  /**
+   * For big rooms: also merge every append into one feed per room, and
+   * expose a `feed` query, so each viewer subscribes once per room instead of
+   * once per person. Costs a second write per batch and up to 100 ms more
+   * delay. Pass `feed: true` to `usePlayback` too. Default: false.
+   */
+  feed?: Feed;
   /**
    * Called before every read of `room`. Throw to deny. Annotate `ctx` with
    * your app's `QueryCtx` to get typed `ctx.db` access.
@@ -127,10 +150,12 @@ export type ExposeApiOptions<
 export function exposeApi<
   Value extends Validator<any, "required", any> = VAny,
   DataModel extends GenericDataModel = GenericDataModel,
+  Feed extends boolean = false,
 >(
   component: ComponentApi,
-  options: ExposeApiOptions<Value, DataModel>,
-): ExposedApi<Infer<Value>> {
+  options: ExposeApiOptions<Value, DataModel, Feed>,
+): ExposedApi<Infer<Value>> &
+  (Feed extends true ? FeedApi<Infer<Value>> : unknown) {
   const value = (options.value ?? v.any()) as Value;
   // The functions below are registered without the app's data model, so
   // hand the callbacks the ctx typed the way the app declared them.
@@ -141,7 +166,7 @@ export function exposeApi<
     options.authorizeRead(ctx as unknown as GenericQueryCtx<DataModel>, {
       room,
     });
-  return {
+  const api: ExposedApi<Infer<Value>> = {
     append: mutationGeneric({
       args: {
         room: v.string(),
@@ -167,6 +192,7 @@ export function exposeApi<
           samples: args.samples,
           duration: args.duration,
           retentionMs: options.retentionMs,
+          feed: options.feed,
         });
       },
     }),
@@ -206,6 +232,18 @@ export function exposeApi<
       },
     }),
   };
+  if (!options.feed) return api as never;
+  const feedApi: FeedApi<Infer<Value>> = {
+    feed: queryGeneric({
+      args: { room: v.string(), count: v.optional(v.number()) },
+      returns: v.array(frameValidatorFor(v.any())),
+      handler: async (ctx, args) => {
+        await authorizeRead(ctx, args.room);
+        return await ctx.runQuery(component.feed.latest, args);
+      },
+    }),
+  };
+  return { ...api, ...feedApi } as never;
 }
 
 /** What `exposeApi` returns, typed with the sample value `V`. */
@@ -229,6 +267,15 @@ export type ExposedApi<V> = {
     "public",
     { room: string; limit?: number },
     Promise<StreamList>
+  >;
+};
+
+/** The `feed` query `exposeApi` adds with `feed: true`. */
+export type FeedApi<V> = {
+  feed: RegisteredQuery<
+    "public",
+    { room: string; count?: number },
+    Promise<Frame<V>[]>
   >;
 };
 

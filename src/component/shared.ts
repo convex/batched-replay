@@ -60,6 +60,47 @@ export function historyPageValidatorFor<
 
 export const historyPageValidator = historyPageValidatorFor(v.any());
 
+// The room feed. The worker picks up a room's new batches this often...
+export const FEED_TICK_MS = 100;
+// ...and keeps ticking (polling) this long after the room goes quiet, so a
+// pause doesn't send it idle and every append after it doesn't have to wake it.
+export const FEED_COOLDOWN_MS = 10_000;
+// One tick reads at most about this much, to stay well inside a
+// transaction's limits. The rest waits for the next tick.
+export const FEED_TICK_BYTES = 4 * 1024 * 1024;
+export const FEED_TICK_BATCHES = 1_000;
+// A frame is a document, so it must stay under the 1 MiB limit. A tick with
+// more than this is split across several frames.
+export const FRAME_BYTES = 768 * 1024;
+// Viewers only need the newest frame; a few seconds' worth are kept.
+export const KEEP_FRAMES = 50;
+// The cron deletes frames older than this, in rooms that went quiet.
+export const FRAME_MAX_AGE_MS = 60_000;
+// A room's first tick starts this far back (commit timestamps are in ns).
+export const FEED_LOOKBACK_NS = 2_000_000_000n;
+
+// One frame of the room feed, with its batches shaped like `latest`'s.
+export function frameValidatorFor<
+  Value extends Validator<any, "required", any>,
+>(value: Value) {
+  return v.object({
+    seq: v.number(),
+    batches: v.array(
+      v.object({
+        _id: v.string(),
+        _creationTime: v.number(),
+        stream: v.string(),
+        seq: v.number(),
+        start: v.number(),
+        end: v.number(),
+        samples: v.array(v.object({ t: v.number(), v: value })),
+      }),
+    ),
+  });
+}
+
+export const frameValidator = frameValidatorFor(v.any());
+
 export const streamListValidator = v.object({
   // Goes up by one each time the room is cleared.
   epoch: v.number(),

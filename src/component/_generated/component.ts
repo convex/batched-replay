@@ -29,6 +29,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
         "internal",
         {
           duration: number;
+          feed?: boolean;
           retentionMs?: number;
           room: string;
           samples: Array<{ t: number; v: any }>;
@@ -76,6 +77,26 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
           seq: number;
           start: number;
           stream: string;
+        }>,
+        Name
+      >;
+    };
+    feed: {
+      latest: FunctionReference<
+        "query",
+        "internal",
+        { count?: number; room: string },
+        Array<{
+          batches: Array<{
+            _creationTime: number;
+            _id: string;
+            end: number;
+            samples: Array<{ t: number; v: any }>;
+            seq: number;
+            start: number;
+            stream: string;
+          }>;
+          seq: number;
         }>,
         Name
       >;

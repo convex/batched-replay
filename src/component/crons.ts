@@ -2,7 +2,7 @@ import { cronJobs } from "convex/server";
 import { v } from "convex/values";
 import { internal } from "./_generated/api.js";
 import { internalMutation } from "./_generated/server.js";
-import { CHUNK, nearReadLimit } from "./shared.js";
+import { CHUNK, FRAME_MAX_AGE_MS, nearReadLimit } from "./shared.js";
 
 const streamKey = v.object({ room: v.string(), stream: v.string() });
 
@@ -73,11 +73,41 @@ export const deleteEmptyStreams = internalMutation({
   },
 });
 
+// The feed trims its own frames as it goes, but a room that went quiet keeps
+// its last few. Those hold copies of batches, so they go after a minute.
+export const deleteOldFrames = internalMutation({
+  args: {},
+  returns: v.null(),
+  handler: async (ctx) => {
+    const old = ctx.db
+      .query("frames")
+      .withIndex("by_creation_time", (q) =>
+        q.lt("_creationTime", Date.now() - FRAME_MAX_AGE_MS),
+      );
+    let deleted = 0;
+    for await (const frame of old) {
+      if (deleted === CHUNK || (await nearReadLimit(ctx))) {
+        await ctx.scheduler.runAfter(0, internal.crons.deleteOldFrames, {});
+        return null;
+      }
+      await ctx.db.delete("frames", frame._id);
+      deleted++;
+    }
+    return null;
+  },
+});
+
 const crons = cronJobs();
 crons.interval(
   "delete expired batches",
   { minutes: 1 },
   internal.crons.deleteExpired,
+  {},
+);
+crons.interval(
+  "delete old feed frames",
+  { minutes: 1 },
+  internal.crons.deleteOldFrames,
   {},
 );
 export default crons;

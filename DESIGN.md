@@ -261,3 +261,57 @@ changed, and why:
 - **Drawing demo:** the board is `usePlayback({ fromStart: true, onReset })`
   alone; the timelapse plays on its own canvas over the board, so nothing has to
   be rebuilt when it ends.
+
+### The room feed (2026-10-20)
+
+From the load test in
+`convex-videos/batching-component/research/component-limits-2026-10-20.md` and
+Ian's suggestion (`db.vars.commitTs` plus the Batch Worker component). Per-stream
+subscriptions stay the default; the feed is opt-in for big rooms.
+
+- **Shape.** Every append stamps its batch with `committed: ctx.db.vars.commitTs`
+  (index `by_room_committed`), feed or not; `latest` and `history` leave the
+  field out, so what clients get is unchanged. With `feed: true`, append also
+  pings a Batch Worker loop named after the room (`component.use(batchWorker)`
+  in `convex.config.ts`). Each tick, the work query (`feed.nextTick`, a
+  snapshot read with no read dependencies) reads the room's batches committed
+  after its cursor, up to 4 MiB or 1,000 batches, stopping between commits. The
+  worker mutation (`feed.writeFrames`) copies them into `frames` docs (one per
+  tick, split if over 768 KiB, a lone batch too big to copy is left for gap
+  fill), and deletes as many old frames as it wrote, keeping about 50 (5 s).
+  The cron deletes frames over a minute old, in rooms that went quiet.
+- **Ticks.** Debounce 100 ms from idle, and the worker mutation returns
+  `debounceMs: 100` while there's work. When there isn't, it polls every
+  100 ms for 10 s before going idle.
+- **The cursor** is `{ committed, frame }`: the last commit copied and the last
+  frame seq written. Batch Worker stores it with each tick, so frame seqs need
+  no counter doc and no read of the previous frame. A room's first tick starts
+  2 s before the snapshot (`ctx.meta.getSnapshotTs()`), not at the start of its
+  history.
+- **Ping and OCC.** `ping` reads the worker's `workers` doc and returns when it's
+  `running`. The loop writes `workers` only on transitions (idle to running and
+  back); its per-tick writes go to `workerState`, which ping doesn't read while
+  running. So in a busy room, appends and the loop don't conflict. A conflict is
+  possible only around a transition: two appends waking an idle worker at once
+  (one retries, then finds it running), or an append racing the loop going idle
+  (the append retries and wakes it, which is what we want). The 10 s cooldown
+  keeps those rare. The loop's last check before going idle is a real read of
+  the batches range, so an append landing then makes the loop retry, not the
+  append.
+- **Clears.** `clear` deletes the room's frames before bumping the epoch. The
+  work query hands the room's epoch to the worker mutation, which re-reads it:
+  if a clear finished in between, it writes nothing and runs the tick again
+  from the same cursor, so a frame of deleted batches can't land after the
+  clear. The clear epoch stays on the stream list.
+- **Client.** `usePlayback(..., { feed: true })` subscribes to `feed` (the
+  newest frame) instead of `latest` per stream, still subscribes to the stream
+  list (for the epoch and who's active), and feeds frames to
+  `Player.ingestFrame`. Only the first result is a snapshot; a stream that first
+  turns up in a later frame is live. The feed only carries streams that moved
+  in the last tick, so on joining, every other active stream's `latest` is
+  fetched once (a one-off query, not a subscription), so people standing still
+  show.
+- **Cost.** N subscriptions instead of N x (N-1); 10 feed re-runs a second per
+  room. That's fewer updates per viewer than per-stream subscriptions once
+  about three people are moving (4 per mover per second). Each batch is written
+  twice, and the delay grows by up to a tick.
