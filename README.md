@@ -159,10 +159,11 @@ React.
 
 - **Writes:** one `append` per sender per flush, so about 4 a second per person
   while they're moving, with a 250 ms flush. Nothing while they're idle.
-- **Reads:** every viewer subscribes to `latest` for each active stream, so each
-  append re-runs that query once per viewer: about senders x viewers re-runs a
-  second, times 4. Ten people in a room all moving is about 400 a second; fifty
-  is about 10,000. The stream list changes at most every 5 s per stream.
+- **Reads:** every viewer subscribes to `latest` for each active stream. Each
+  append runs that query once and Convex shares the result with every viewer,
+  but each viewer's update counts as a function call: about senders x viewers x
+  4 a second. Ten people in a room all moving is about 400 a second; fifty is
+  about 10,000. The stream list changes at most every 5 s per stream.
 - **Abuse:** a client can call `append` as fast as it likes. Put
   [`@convex-dev/rate-limiter`](https://www.convex.dev/components/rate-limiter)
   in `authorizeWrite` (say, 10 appends a second per user) for anything public.
@@ -171,6 +172,27 @@ React.
   storage grows by every sample ever sent: one person moving a cursor at 60
   samples a second is roughly 5 MB an hour. Keep forever only what you'll
   replay, like drawings.
+
+## Limits
+
+Measured with a load test (N people in one room, each moving at 60 Hz with a 250
+ms flush and watching everyone else) against a Convex cloud dev deployment,
+October 2026:
+
+| People in one room | Write time (p50) | Each viewer receives |
+| ------------------ | ---------------- | -------------------- |
+| 10                 | about 330 ms     | 45 KB/s              |
+| 25                 | about 360 ms     | 120 KB/s             |
+| 50                 | about 460 ms     | 240 KB/s             |
+| 100                | about 1.5 s      | 460 KB/s             |
+
+The test ran from Perth to a US region, so about 300 ms of each write is the
+network. There were no errors and no write conflicts at any size: each person
+only writes their own batches. It's comfortable up to about 50 people moving at
+once in one room. Past that, writes slow down, senders automatically send fewer,
+bigger batches, and playback falls further behind, rather than anything failing.
+Bandwidth is about 5 KB/s per viewer for each other person moving; rounding your
+values shrinks it.
 
 ## Example
 

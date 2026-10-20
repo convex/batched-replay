@@ -261,3 +261,7 @@ changed, and why:
 - **Drawing demo:** the board is `usePlayback({ fromStart: true, onReset })`
   alone; the timelapse plays on its own canvas over the board, so nothing has to
   be rebuilt when it ends.
+
+## The room feed (parked, 2026-10-20)
+
+Ian suggested `db.vars.commitTs` and the Batch Worker component: a per-room worker merges the room's new batches into one feed, so viewers subscribe once per room instead of once per person. It's built on the `room-feed` branch (438c227) and load-tested against a cloud deployment (the video folder's research/component-limits-2026-10-20.md). Writes stayed fast to 100 people and subscriptions dropped 50x, but the worker loop sometimes paused for 6 to 8 s at 50 people with no errors, it dropped frames unless it sent the newest two, and it costs more for small rooms: the loop is a scheduled function, which is billed at about 10 calls a second per busy room, so it only beats per-stream subscriptions once about 4 people are moving. Parked: per-stream subscriptions stay the only mode, with the limits in the README.
