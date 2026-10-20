@@ -14,8 +14,15 @@
   margin: 0 0 4px;
   font-size: 16px;
 }
-.hud input {
+.hud label {
+  display: block;
+}
+.hud input[type="range"] {
   width: 220px;
+}
+.hud input[type="checkbox"] {
+  margin: 0 6px 0 0;
+  vertical-align: middle;
 }
 .cursor {
   position: fixed;

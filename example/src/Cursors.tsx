@@ -9,6 +9,9 @@ type Point = { x: number; y: number };
 export default function Cursors() {
   const me = useAnonymousId();
   const [flushMs, setFlushMs] = useState(250);
+  // Off shows what you'd get without the trick: each cursor jumps to the
+  // newest point whenever a batch lands, instead of replaying the batch.
+  const [replay, setReplay] = useState(true);
   const [mouse, setMouse] = useState<Point>({ x: -100, y: -100 });
 
   const send = useSender(api.cursors.append, {
@@ -19,9 +22,11 @@ export default function Cursors() {
   const { values, stats } = usePlayback(api.cursors, {
     room: ROOM,
     self: me,
-    // No delayMs: it follows the senders' flush rate on its own.
-    interpolate: true,
+    // No delayMs when replaying: it follows the senders' flush rate on its
+    // own. A delay of 0 with no smoothing just shows the newest point.
+    ...(replay ? { interpolate: true } : { delayMs: 0, interpolate: false }),
   });
+  const writesPerSecond = 1000 / flushMs;
 
   useEffect(() => {
     const onMove = (e: PointerEvent) => {
@@ -39,10 +44,24 @@ export default function Cursors() {
         <h1>Batched replay: cursors</h1>
         <div>Open this page in a second tab and move the mouse.</div>
         <div>
-          You send up to {(1000 / flushMs).toFixed(1)} writes/s while moving
+          You send up to {writesPerSecond.toFixed(1)} writes/s (
+          {Math.round(writesPerSecond * 60).toLocaleString()} a minute) while
+          moving
         </div>
         <div>You receive {stats.batchesPerSecond.toFixed(1)} batches/s</div>
-        <div>Playing {Math.round(stats.delayMs)} ms behind</div>
+        <div>
+          {replay
+            ? `Replaying ${Math.round(stats.delayMs)} ms behind`
+            : "Replay off: jumping to the newest point"}
+        </div>
+        <label>
+          <input
+            type="checkbox"
+            checked={replay}
+            onChange={(e) => setReplay(e.target.checked)}
+          />{" "}
+          Replay batches
+        </label>
         <label>
           Flush every {flushMs} ms
           <br />
