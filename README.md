@@ -9,7 +9,7 @@ little behind, and costs a handful of writes a second instead of 60. Batches are
 kept, so a whole session can be replayed later.
 
 Found a bug? Feature request?
-[File it here](https://github.com/get-convex/batched-replay/issues).
+[File it here](https://github.com/convex/batched-replay/issues).
 
 <!-- START: Include on https://convex.dev/components -->
 

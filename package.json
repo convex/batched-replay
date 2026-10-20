@@ -3,11 +3,11 @@
   "description": "Batch fast-changing values (cursors, pen strokes, game movement) into a few writes a second and replay them smoothly, live or later.",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/get-convex/batched-replay.git"
+    "url": "git+https://github.com/convex/batched-replay.git"
   },
-  "homepage": "https://github.com/get-convex/batched-replay#readme",
+  "homepage": "https://github.com/convex/batched-replay#readme",
   "bugs": {
-    "url": "https://github.com/get-convex/batched-replay/issues"
+    "url": "https://github.com/convex/batched-replay/issues"
   },
   "version": "0.1.0",
   "license": "Apache-2.0",
