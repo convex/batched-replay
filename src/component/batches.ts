@@ -94,7 +94,7 @@ export const latest = query({
   args: { room: v.string(), stream: v.string(), count: v.optional(v.number()) },
   returns: v.array(batchValidator),
   handler: async (ctx, args) => {
-    const count = Math.min(Math.max(args.count ?? 2, 1), 20);
+    const count = Math.min(Math.max(args.count ?? 1, 1), 20);
     const newestFirst = await ctx.db
       .query("batches")
       .withIndex("by_stream", (q) =>

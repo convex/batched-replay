@@ -193,7 +193,7 @@ describe("batches.latest", () => {
     vi.useRealTimers();
   });
 
-  test("returns the newest batches oldest first, default 2", async () => {
+  test("returns the newest batches oldest first, default 1", async () => {
     const t = initConvexTest();
     for (let i = 0; i < 5; i++) {
       vi.setSystemTime(T0 + i * 250);
@@ -203,7 +203,7 @@ describe("batches.latest", () => {
       room: "r",
       stream: "a",
     });
-    expect(batches.map((b) => b.seq)).toEqual([3, 4]);
+    expect(batches.map((b) => b.seq)).toEqual([4]);
     const three = await t.query(api.batches.latest, {
       room: "r",
       stream: "a",
