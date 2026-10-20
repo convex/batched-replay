@@ -1,6 +1,7 @@
 /// <reference types="vite/client" />
 
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { ConvexError } from "convex/values";
 import { api } from "./_generated/api.js";
 import { initConvexTest } from "./setup.test.js";
 
@@ -46,7 +47,13 @@ describe("batches.append", () => {
       samples: [sample(0), sample(50), sample(150), sample(200)],
       duration: 200,
     });
-    expect(kept).not.toBeNull();
+    // Kept samples start 900 ms in, so the first two were dropped.
+    expect(kept).toEqual({
+      seq: 0,
+      start: T0 + 900,
+      end: T0 + 1_100,
+      dropped: 2,
+    });
     const [batch] = await t.query(api.batches.latest, {
       room: "r",
       stream: "a",
@@ -75,7 +82,12 @@ describe("batches.append", () => {
 
   test("start is now minus duration", async () => {
     const t = initConvexTest();
-    expect(await append(t)).toEqual({ seq: 0, start: T0 - 250, end: T0 });
+    expect(await append(t)).toEqual({
+      seq: 0,
+      start: T0 - 250,
+      end: T0,
+      dropped: 0,
+    });
   });
 
   test("clamps start so a stream never overlaps itself", async () => {
@@ -107,6 +119,10 @@ describe("batches.append", () => {
   test("rejects bad input", async () => {
     const t = initConvexTest();
     const base = { room: "r", stream: "a", duration: 100 };
+    // ConvexErrors, so the app's client sees the message in production too.
+    await expect(
+      t.mutation(api.batches.append, { ...base, samples: [] }),
+    ).rejects.toThrow(ConvexError);
     await expect(
       t.mutation(api.batches.append, { ...base, samples: [] }),
     ).rejects.toThrow(/1 to 2000 samples/);
@@ -154,6 +170,21 @@ describe("batches.append", () => {
           samples: [sample(0)],
         }),
       ).rejects.toThrow(/duration/);
+    }
+  });
+
+  test("rejects a negative or non-finite retentionMs", async () => {
+    const t = initConvexTest();
+    for (const retentionMs of [-1, NaN, Infinity]) {
+      await expect(
+        t.mutation(api.batches.append, {
+          room: "r",
+          stream: "a",
+          duration: 100,
+          samples: [sample(0)],
+          retentionMs,
+        }),
+      ).rejects.toThrow(/retentionMs/);
     }
   });
 
@@ -210,6 +241,21 @@ describe("batches.latest", () => {
       count: 3,
     });
     expect(three.map((b) => b.seq)).toEqual([2, 3, 4]);
+  });
+
+  test("a count that isn't a finite number falls back to 1", async () => {
+    const t = initConvexTest();
+    await append(t);
+    vi.setSystemTime(T0 + 250);
+    await append(t);
+    for (const count of [NaN, Infinity]) {
+      const batches = await t.query(api.batches.latest, {
+        room: "r",
+        stream: "a",
+        count,
+      });
+      expect(batches.map((b) => b.seq)).toEqual([1]);
+    }
   });
 
   test("only returns the asked stream", async () => {

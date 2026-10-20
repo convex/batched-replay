@@ -13,10 +13,10 @@ If this is your first time, here are the recommended steps:
    latter, ensure you have an npmjs account with permissions to push to
    `my-org`.
 2. `npm login` to login to npmjs.
-3. `npm run clean` to clean your `/dist` directory.
-4. `npm ci` to install the dependencies with the versions specified in
+3. `npm ci` to install the dependencies with the versions specified in
    `package-lock.json`.
-5. `npm run build` to build the package fresh.
+4. `npm run build:clean` to delete `/dist` and build the package fresh.
+5. (Optional) `npm pack --dry-run` to list the files that will be published.
 6. (Optional) `npm run typecheck` to typecheck the package.
 7. (Optional) `npm run lint` to lint the package.
 8. (Optional) `npm run test` to test the package.
@@ -24,7 +24,10 @@ If this is your first time, here are the recommended steps:
    try installing it in another project with
    `npm install ./path/to/your-package.tgz` to sanity check that it works as
    expected. You can remove the .tgz file after.
-10. `npm publish --access public` to publish the package to npm.
+10. `npm publish --access public` to publish the package to npm. Do the first
+    publish by hand like this, not with `npm run release`: `release` bumps the
+    patch version first, so it would publish 0.1.1 instead of 0.1.0. A scoped
+    package also needs `--access public` the first time.
 11. `git tag v0.1.0` to tag the new version.
 12. `git push --follow-tags` to push the tags to the repository. This way, other
     contributors can always see what code was published with each version.
@@ -41,7 +44,8 @@ In package.json, there are some scripts that are useful for doing releases.
   version.
 - `version` will open the changelog in vim and then save it before committing
   the new version.
-- `prepublishOnly` will make a clean build of the package before publishing.
+- `prepublishOnly` (`npm run build:clean`) will make a clean build of the
+  package before publishing.
 
 These are not required and can be modified or removed if desired. They will all
 be run automatically when using one of the deployment commands.
@@ -75,8 +79,7 @@ git push --follow-tags
 ## Building a one-off package
 
 ```sh
-npm run clean
-npm run build
+npm run build:clean
 npm pack
 ```
 

@@ -6,7 +6,13 @@ import type {
   RegisteredMutation,
   RegisteredQuery,
 } from "convex/server";
-import { v, type Infer, type Validator, type VAny } from "convex/values";
+import {
+  ConvexError,
+  v,
+  type Infer,
+  type Validator,
+  type VAny,
+} from "convex/values";
 import type { ComponentApi } from "../component/_generated/component.js";
 import {
   batchValidatorFor,
@@ -29,6 +35,30 @@ export type Batch<V> = Omit<History["batches"][number], "samples"> & {
   samples: Sample<V>[];
 };
 export type StreamList = ComponentApi["streams"]["list"]["_returnType"];
+/**
+ * What `append` returns: where the batch went on the stream's timeline, and
+ * how many leading samples were dropped because they were captured before
+ * the room was last cleared. Null when nothing was stored.
+ */
+export type AppendResult = {
+  seq: number;
+  start: number;
+  end: number;
+  dropped: number;
+} | null;
+
+/** The batch `onAppend` is called with, just after it was stored. */
+export type AppendedBatch<V> = {
+  room: string;
+  stream: string;
+  seq: number;
+  start: number;
+  end: number;
+  /** Only the samples that were stored. One's server time is `start + t`. */
+  samples: Sample<V>[];
+  /** How many leading samples were left out, captured before a clear. */
+  dropped: number;
+};
 
 /**
  * Use from your own queries and mutations. `V` is the shape of one sample's
@@ -40,6 +70,10 @@ export class BatchedReplay<V = unknown> {
     private options: { retentionMs?: number } = {},
   ) {}
 
+  /**
+   * Stores a batch. There's no `onAppend` here: do your mirroring on the
+   * next line, in the same mutation.
+   */
   append(
     ctx: MutationCtx,
     args: {
@@ -48,7 +82,7 @@ export class BatchedReplay<V = unknown> {
       samples: Sample<V>[];
       duration: number;
     },
-  ) {
+  ): Promise<AppendResult> {
     return ctx.runMutation(this.component.batches.append, {
       ...args,
       retentionMs: this.options.retentionMs,
@@ -89,7 +123,7 @@ export class BatchedReplay<V = unknown> {
 }
 
 export type ExposeApiOptions<
-  Value,
+  Value extends Validator<any, "required", any>,
   DataModel extends GenericDataModel = GenericDataModel,
 > = {
   /**
@@ -116,6 +150,17 @@ export type ExposeApiOptions<
     ctx: GenericMutationCtx<DataModel>,
     args: { room: string; stream?: string },
   ): Promise<string>;
+  /**
+   * Called by `append` after the batch is stored, in the same transaction,
+   * to mirror what you need into your own tables. Not called when nothing
+   * was stored. If it throws, the append rolls back. It runs on every
+   * append, so return early when there's nothing to do, and write to
+   * documents per stream or per user, never one shared room document.
+   */
+  onAppend?(
+    ctx: GenericMutationCtx<DataModel>,
+    batch: AppendedBatch<Infer<Value>>,
+  ): Promise<void>;
 };
 
 /**
@@ -151,23 +196,41 @@ export function exposeApi<
       },
       returns: v.union(
         v.null(),
-        v.object({ seq: v.number(), start: v.number(), end: v.number() }),
+        v.object({
+          seq: v.number(),
+          start: v.number(),
+          end: v.number(),
+          dropped: v.number(),
+        }),
       ),
       handler: async (ctx, args) => {
-        const stream = await options.authorizeWrite(
-          ctx as unknown as GenericMutationCtx<DataModel>,
-          { room: args.room, stream: args.stream },
-        );
+        const appCtx = ctx as unknown as GenericMutationCtx<DataModel>;
+        const stream = await options.authorizeWrite(appCtx, {
+          room: args.room,
+          stream: args.stream,
+        });
         if (typeof stream !== "string") {
-          throw new Error("authorizeWrite must return the stream key");
+          throw new ConvexError("authorizeWrite must return the stream key");
         }
-        return await ctx.runMutation(component.batches.append, {
+        const result = await ctx.runMutation(component.batches.append, {
           room: args.room,
           stream,
           samples: args.samples,
           duration: args.duration,
           retentionMs: options.retentionMs,
         });
+        // Same transaction: if onAppend throws, the batch isn't stored.
+        if (result && options.onAppend) {
+          type V = Infer<Value>;
+          const stored = args.samples.slice(result.dropped) as Sample<V>[];
+          await options.onAppend(appCtx, {
+            room: args.room,
+            stream,
+            ...result,
+            samples: stored,
+          });
+        }
+        return result;
       },
     }),
     latest: queryGeneric({
@@ -213,7 +276,7 @@ export type ExposedApi<V> = {
   append: RegisteredMutation<
     "public",
     { room: string; stream?: string; samples: Sample<V>[]; duration: number },
-    Promise<{ seq: number; start: number; end: number } | null>
+    Promise<AppendResult>
   >;
   latest: RegisteredQuery<
     "public",

@@ -34,7 +34,7 @@ export type ComponentApi<Name extends string | undefined = string | undefined> =
           samples: Array<{ t: number; v: any }>;
           stream: string;
         },
-        null | { end: number; seq: number; start: number },
+        null | { dropped: number; end: number; seq: number; start: number },
         Name
       >;
       history: FunctionReference<

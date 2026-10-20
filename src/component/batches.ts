@@ -1,4 +1,4 @@
-import { v } from "convex/values";
+import { ConvexError, v } from "convex/values";
 import { mutation, query, type QueryCtx } from "./_generated/server.js";
 import { sampleValidator } from "./schema.js";
 import {
@@ -7,8 +7,10 @@ import {
   MAX_SAMPLES,
   TOUCH_MS,
   batchValidator,
+  clampCount,
   cursorValidator,
   historyPageValidator,
+  nearReadLimit,
 } from "./shared.js";
 
 export const append = mutation({
@@ -20,12 +22,18 @@ export const append = mutation({
     retentionMs: v.optional(v.number()),
   },
   // Null when every sample was captured before the room was last cleared.
+  // `dropped` is how many leading samples were left out for that reason.
   returns: v.union(
     v.null(),
-    v.object({ seq: v.number(), start: v.number(), end: v.number() }),
+    v.object({
+      seq: v.number(),
+      start: v.number(),
+      end: v.number(),
+      dropped: v.number(),
+    }),
   ),
   handler: async (ctx, args) => {
-    validate(args.samples, args.duration);
+    validate(args.samples, args.duration, args.retentionMs);
     const now = Date.now();
     const prev = await ctx.db
       .query("batches")
@@ -47,14 +55,16 @@ export const append = mutation({
     const end = start + args.duration;
 
     // Someone cleared the room while these were still in the sender's buffer:
-    // keep only what was captured after the clear.
+    // keep only what was captured after the clear. Times never go down, so
+    // the ones to drop are always at the start.
     const roomDoc = await ctx.db
       .query("rooms")
       .withIndex("by_room", (q) => q.eq("room", args.room))
       .unique();
     const clearedAt = roomDoc?.clearedAt ?? -Infinity;
-    const samples = args.samples.filter((s) => start + s.t >= clearedAt);
-    if (samples.length === 0) return null;
+    const dropped = args.samples.findIndex((s) => start + s.t >= clearedAt);
+    if (dropped === -1) return null;
+    const samples = args.samples.slice(dropped);
 
     const seq = prev ? prev.seq + 1 : 0;
     const expiresAt =
@@ -86,7 +96,7 @@ export const append = mutation({
     } else if (end - streamDoc.lastEnd > TOUCH_MS) {
       await ctx.db.patch("streams", streamDoc._id, { lastEnd: end });
     }
-    return { seq, start, end };
+    return { seq, start, end, dropped };
   },
 });
 
@@ -94,14 +104,19 @@ export const latest = query({
   args: { room: v.string(), stream: v.string(), count: v.optional(v.number()) },
   returns: v.array(batchValidator),
   handler: async (ctx, args) => {
-    const count = Math.min(Math.max(args.count ?? 1, 1), 20);
-    const newestFirst = await ctx.db
+    const count = clampCount(args.count, 1, 20);
+    const rows = ctx.db
       .query("batches")
       .withIndex("by_stream", (q) =>
         q.eq("room", args.room).eq("stream", args.stream),
       )
-      .order("desc")
-      .take(count);
+      .order("desc");
+    // Twenty big batches could pass the read limit, so stop early if need be.
+    const newestFirst = [];
+    for await (const batch of rows) {
+      newestFirst.push(batch);
+      if (newestFirst.length === count || (await nearReadLimit(ctx))) break;
+    }
     return newestFirst.reverse();
   },
 });
@@ -115,23 +130,32 @@ export const history = query({
   },
   returns: historyPageValidator,
   handler: async (ctx, args) => {
-    const limit = Math.min(Math.max(args.limit ?? 100, 1), 500);
+    const limit = clampCount(args.limit, 100, 500);
     const rows =
       args.stream !== undefined
         ? streamRows(ctx, args.room, args.stream, args.after?.seq)
         : roomRows(ctx, args.room, args.after);
-    // Read one extra row to learn whether another page exists.
     const batches = [];
+    let more = false;
     for await (const batch of rows) {
+      // We've read one row past a full page, so another page exists.
+      if (batches.length === limit) {
+        more = true;
+        break;
+      }
       batches.push(batch);
-      if (batches.length > limit) break;
+      // Big batches can fill the read limit before the page is full. A short
+      // page is fine: the cursor carries on from its last row.
+      if (await nearReadLimit(ctx)) {
+        more = true;
+        break;
+      }
     }
-    const page = batches.slice(0, limit);
-    const last = page[page.length - 1];
+    const last = batches[batches.length - 1];
     return {
-      batches: page,
+      batches,
       next:
-        batches.length > limit && last
+        more && last
           ? {
               start: last.start,
               creationTime: last._creationTime,
@@ -155,46 +179,62 @@ function streamRows(
   });
 }
 
-// Whole room: many batches can share a start, so resume from `start` and skip
-// the ones already returned (the index breaks ties by _creationTime).
-function roomRows(
+// Whole room: many batches can share a start, and the index breaks ties by
+// _creationTime. So resume with the rest of the cursor's start, then
+// everything after it.
+async function* roomRows(
   ctx: QueryCtx,
   room: string,
   after: { start: number; creationTime: number } | undefined,
 ) {
-  const rows = ctx.db.query("batches").withIndex("by_room_start", (q) => {
-    const r = q.eq("room", room);
-    return after ? r.gte("start", after.start) : r;
-  });
-  if (!after) return rows;
-  // Only skips rows that share `start` with the cursor, so it stays cheap.
-  // eslint-disable-next-line @convex-dev/no-filter-in-query
-  return rows.filter((q) =>
-    q.or(
-      q.gt(q.field("start"), after.start),
-      q.gt(q.field("_creationTime"), after.creationTime),
-    ),
+  const batches = ctx.db.query("batches");
+  if (!after) {
+    yield* batches.withIndex("by_room_start", (q) => q.eq("room", room));
+    return;
+  }
+  yield* batches.withIndex("by_room_start", (q) =>
+    q
+      .eq("room", room)
+      .eq("start", after.start)
+      .gt("_creationTime", after.creationTime),
+  );
+  yield* batches.withIndex("by_room_start", (q) =>
+    q.eq("room", room).gt("start", after.start),
   );
 }
 
-function validate(samples: { t: number }[], duration: number) {
+// ConvexErrors reach the app's client with their message, even in
+// production, where other errors only say "Server Error".
+function validate(
+  samples: { t: number }[],
+  duration: number,
+  retentionMs: number | undefined,
+) {
   if (
     !Number.isFinite(duration) ||
     duration < 0 ||
     duration > MAX_DURATION_MS
   ) {
-    throw new Error(`duration must be between 0 and ${MAX_DURATION_MS} ms`);
+    throw new ConvexError(
+      `duration must be between 0 and ${MAX_DURATION_MS} ms`,
+    );
   }
   if (samples.length < 1 || samples.length > MAX_SAMPLES) {
-    throw new Error(`a batch needs 1 to ${MAX_SAMPLES} samples`);
+    throw new ConvexError(`a batch needs 1 to ${MAX_SAMPLES} samples`);
   }
   let previous = 0;
   for (const { t } of samples) {
     if (!Number.isFinite(t) || t < previous || t > duration) {
-      throw new Error(
+      throw new ConvexError(
         "sample times must be non-decreasing and within [0, duration]",
       );
     }
     previous = t;
+  }
+  if (
+    retentionMs !== undefined &&
+    (!Number.isFinite(retentionMs) || retentionMs < 0)
+  ) {
+    throw new ConvexError("retentionMs must be a finite number, 0 or more");
   }
 }

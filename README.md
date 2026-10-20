@@ -1,10 +1,17 @@
 # @convex-dev/batched-replay
 
+[![npm version](https://badge.fury.io/js/@convex-dev%2Fbatched-replay.svg)](https://badge.fury.io/js/@convex-dev%2Fbatched-replay)
+
 Realtime-ish data on plain Convex. A sender batches fast-changing values
 (cursors, pen strokes, game movement) into one mutation every ~250 ms; watchers
 replay each batch with its original timing. It looks smooth and live, runs a
 little behind, and costs a handful of writes a second instead of 60. Batches are
 kept, so a whole session can be replayed later.
+
+Found a bug? Feature request?
+[File it here](https://github.com/get-convex/batched-replay/issues).
+
+<!-- START: Include on https://convex.dev/components -->
 
 ## Install
 
@@ -79,6 +86,73 @@ From your own functions you can also use the class:
 `new BatchedReplay(components.batchedReplay)` has `append`, `latest`, `history`,
 `streams` and `clear`. `clear` isn't in `exposeApi`, since it's destructive:
 wrap it in your own mutation with your own checks.
+
+## Mirror into your own tables (onAppend)
+
+Batches are the component's data, made for playback. When your app wants its own
+durable copy of something, `onAppend` is the place: finished drawing strokes,
+game laps or checkpoints, sensor rollups and alerts, last-seen presence,
+moderation flags, or scheduling an agent when something finishes.
+
+```ts
+export const { append, latest, history, streams } = exposeApi(
+  components.batchedReplay,
+  {
+    value: v.object({
+      k: v.union(v.literal("down"), v.literal("move"), v.literal("up")),
+      x: v.number(),
+      y: v.number(),
+    }),
+    authorizeRead,
+    authorizeWrite,
+    // Called by append after the batch is stored, in the same transaction.
+    onAppend: async (ctx: MutationCtx, batch) => {
+      // It runs on every append: return early unless a stroke finished.
+      const ups = batch.samples.filter((s) => s.v.k === "up");
+      if (ups.length === 0) return;
+      for (const up of ups) {
+        await ctx.db.insert("penUps", {
+          stream: batch.stream,
+          seq: batch.seq,
+          at: batch.start + up.t, // the sample's server time
+          x: up.v.x,
+          y: up.v.y,
+        });
+      }
+    },
+  },
+);
+```
+
+`batch` has `room`, `stream`, `seq`, `start`, `end`, `samples` (typed by
+`value`) and `dropped`. `samples` are only the ones that were stored: `dropped`
+leading samples were left out because they were captured before the room was
+last cleared. It isn't called when nothing was stored. The drawing demo's
+`example/convex/drawing.ts` builds whole strokes this way.
+
+The rules, most important first:
+
+- **Write documents per stream or per user, never one shared room document.**
+  Everyone's appends (about 4 a second each) would then write the same document,
+  conflict and retry, which brings back the write conflicts this component is
+  built to avoid. For room totals, use
+  [`@convex-dev/sharded-counter`](https://www.convex.dev/components/sharded-counter)
+  or [`@convex-dev/aggregate`](https://www.convex.dev/components/aggregate).
+- **Filter first and return early**, as above. It runs on every append.
+- **A throw rolls back the append**, and stalls that person's stream for
+  everyone while their sender retries it. Wrap best-effort work in
+  `try`/`catch`, or hand it to `ctx.scheduler.runAfter(0, ...)`.
+- **Key rows by `(stream, seq)`**, so the hook is idempotent.
+- **Ordering is per stream**, by `seq`. Batches from different streams can
+  arrive in any order.
+- **A batch is not an event.** A stroke spans many batches, so collect it per
+  stream, and expect partial ones: a stroke with no `down` (after a clear, or
+  when a sender drops samples over a minute old), or a `down` that never gets
+  its `up`.
+
+From the `BatchedReplay` class there's no hook: `append` returns the same
+`{ seq, start, end, dropped }` (or null), so do your mirroring on the next line
+of your mutation.
 
 ## Send
 
@@ -193,6 +267,33 @@ once in one room. Past that, writes slow down, senders automatically send fewer,
 bigger batches, and playback falls further behind, rather than anything failing.
 Bandwidth is about 5 KB/s per viewer for each other person moving; rounding your
 values shrinks it.
+
+<!-- END: Include on https://convex.dev/components -->
+
+## Testing
+
+To test your own functions with
+[`convex-test`](https://www.npmjs.com/package/convex-test), register the
+component from `@convex-dev/batched-replay/test`:
+
+```ts
+/// <reference types="vite/client" />
+import { convexTest } from "convex-test";
+import batchedReplay from "@convex-dev/batched-replay/test";
+import schema from "./schema";
+
+const modules = import.meta.glob("./**/*.ts");
+
+export function initConvexTest() {
+  const t = convexTest(schema, modules);
+  batchedReplay.register(t);
+  return t;
+}
+```
+
+That export is TypeScript source that uses `import.meta.glob`, so your app needs
+`convex-test`, `vitest` and `vite` (for the `vite/client` types) in its dev
+dependencies.
 
 ## Example
 

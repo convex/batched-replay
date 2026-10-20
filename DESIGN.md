@@ -63,7 +63,7 @@ most every 5 s per stream rather than on every batch.
 
 Modules named after what they deal with: `batches.ts`, `streams.ts`, plus `crons.ts`.
 
-- `batches.append` (mutation). Args `{ room, stream, samples, duration, retentionMs? }`. Returns `{ seq, start, end }`.
+- `batches.append` (mutation). Args `{ room, stream, samples, duration, retentionMs? }`. Returns `{ seq, start, end, dropped }`, or null when nothing was stored (`dropped` counts the leading samples captured before the room was last cleared).
   - Validate: 1 to 2,000 samples, `t` within `[0, duration]` and non-decreasing, `0 <= duration <= 60_000`. Throw a clear error otherwise.
   - `now = Date.now()`. Read the stream's latest batch (`by_stream` desc, first).
   - `start = now - duration`. If a previous batch exists and `start < prev.end`, clamp `start = prev.end` so a stream's timeline never overlaps or goes backwards (this absorbs network jitter). If clamping would put `start` more than 1,000 ms after `now - duration`, re-anchor to `now - duration` instead (a one-off latency spike shouldn't push the stream into the future forever). `end = start + duration`.
@@ -95,6 +95,7 @@ export const { append, latest, history, streams } = exposeApi(components.batched
   retentionMs?: number,
   authorizeRead: async (ctx, { room }) => void,              // throw to deny
   authorizeWrite: async (ctx, { room, stream? }) => string,  // the stream key
+  onAppend?: async (ctx, batch) => void,  // after the batch is stored, same transaction
 });
 ```
 
@@ -261,6 +262,54 @@ changed, and why:
 - **Drawing demo:** the board is `usePlayback({ fromStart: true, onReset })`
   alone; the timelapse plays on its own canvas over the board, so nothing has to
   be rebuilt when it ends.
+
+### onAppend, and the audit before publishing (2026-10-20)
+
+- **`onAppend(ctx, batch)` on `exposeApi`**, agreed by a three-model consensus.
+  The app's `append` calls it after the component stored the batch, in the same
+  transaction, with the full app ctx and `batch.samples` typed by `value`.
+  `samples` are only the stored ones (`dropped`, the new field on `append`'s
+  result, is how many leading samples a clear cut off; always a prefix, because
+  `t` never goes down). It isn't called when nothing was stored, and a throw
+  rolls the whole append back.
+  - Observe-only: no veto (that's `authorizeWrite`) and no transforming samples,
+    so what's stored and what playback sees is always what the sender sent.
+  - An app-side callback, not a function handle passed into the component: it
+    gets the app's typed ctx and `V` with no `createFunctionHandle` plumbing,
+    and the component stays unaware of app tables.
+  - No `onClear` or `onExpire`: the app clears through its own mutation and can
+    act there, and expiry is a cron in the component with no app ctx.
+  - The `BatchedReplay` class has no hook; its `append` returns the same result
+    and the app mirrors on the next line.
+  - The README's rules lead with "per-stream or per-user documents, never one
+    shared room document", since that's the one mistake that brings back the
+    write conflicts the design exists to avoid.
+- **Drawing demo:** `onAppend` collects each stream's points in an `openStrokes`
+  doc and moves it to `strokes` on pen-up, halving a stroke's detail at 2,000
+  points so it stays under the array and document limits. The Strokes sidebar
+  outlives "Clear board", which is the point.
+- **Reads have a byte budget too.** `history` and `latest` stop once the read
+  budget is nearly spent (`nearReadLimit`); `history` returns a short page with
+  a `next` cursor, so 1 MiB batches can't pass the 16 MiB read limit.
+- **A room clear resumes where it stopped.** It used to rescan the room from the
+  start on every chunk, and stopped for good if the batches it keeps (written
+  after the clear began) filled a chunk's read budget, leaving older batches
+  behind. Each chunk now passes on the last `(stream, seq)` it read, and the
+  stream-doc pass is its own scheduled mutation (`clearStreamDocs`), with its
+  own read guard. `clear` calls the helper directly instead of `ctx.runMutation`
+  on its own internal function; `clearChunk` is just the scheduler's way back
+  in.
+- **Caller-facing errors are `ConvexError`s** (sample count, duration, sample
+  times, `retentionMs`, `authorizeWrite` not returning a string), so apps see
+  the message in production instead of "Server Error".
+- **Numeric args are guarded:** a NaN or infinite `count` or `limit` falls back
+  to the default; a negative or non-finite `retentionMs` is rejected.
+- **The room history cursor is two index ranges** (the rest of the cursor's
+  `start` by `_creationTime`, then everything after it) instead of a
+  `.filter()`.
+- **Packaging:** README boilerplate for the components directory, a real 0.1.0
+  changelog, `prepublishOnly`, `react` an optional peer, tests left out of the
+  package, `npm ci` in CI. The `convex` peer stays `^1.43.0`.
 
 ## The room feed (parked, 2026-10-20)
 

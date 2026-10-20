@@ -1,6 +1,6 @@
 import { useRef, useState } from "react";
 import type { PointerEvent } from "react";
-import { useMutation } from "convex/react";
+import { useMutation, useQuery } from "convex/react";
 import {
   useHistory,
   usePlayback,
@@ -69,6 +69,19 @@ function applySample(
   else pens.set(stream, point);
 }
 
+// A thumbnail's view box: the stroke's own bounds plus a margin, so a small
+// stroke fills its thumbnail instead of being a dot on a full-size board.
+function fitBox(points: Point[]) {
+  const xs = points.map((p) => p.x);
+  const ys = points.map((p) => p.y);
+  const pad = 40;
+  const minX = Math.min(...xs) - pad;
+  const minY = Math.min(...ys) - pad;
+  const w = Math.max(...xs) - Math.min(...xs) + 2 * pad;
+  const h = Math.max(...ys) - Math.min(...ys) + 2 * pad;
+  return `${minX} ${minY} ${w} ${h}`;
+}
+
 export default function Drawing() {
   const me = useAnonymousId();
   const boardRef = useRef<HTMLCanvasElement>(null);
@@ -81,6 +94,9 @@ export default function Drawing() {
     timelapse: new Map() as Pens,
   }));
   const clearRoom = useMutation(api.drawing.clear);
+  const clearStrokes = useMutation(api.drawing.clearStrokes);
+  // Finished strokes, mirrored into the app's own table by onAppend.
+  const strokes = useQuery(api.drawing.recentStrokes);
 
   const send = useSender(api.drawing.append, {
     room: ROOM,
@@ -166,6 +182,34 @@ export default function Drawing() {
           <button onClick={() => void clearRoom({})}>Clear board</button>
         </div>
       </div>
+      <aside className="strokes">
+        <h2>Strokes</h2>
+        <p>Kept in the app's own table, so they outlive Clear board.</p>
+        <div className="stroke-grid">
+          {strokes?.map((stroke) => (
+            <figure key={stroke._id}>
+              <svg viewBox={fitBox(stroke.points)}>
+                <polyline
+                  points={stroke.points.map((p) => `${p.x},${p.y}`).join(" ")}
+                  fill="none"
+                  stroke={colorFor(stroke.stream)}
+                  strokeWidth={3}
+                  vectorEffect="non-scaling-stroke"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+              <figcaption>{stroke.pointCount} points</figcaption>
+            </figure>
+          ))}
+        </div>
+        <button
+          disabled={!strokes?.length}
+          onClick={() => void clearStrokes({})}
+        >
+          Clear strokes
+        </button>
+      </aside>
       <div className="board-wrap">
         <canvas
           ref={boardRef}

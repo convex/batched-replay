@@ -68,6 +68,14 @@ describe("batches.history", () => {
     expect(seen.sort()).toEqual(["s0", "s1", "s2", "s3", "s4", "s5", "s6"]);
   });
 
+  test("a limit that isn't a finite number falls back to 100", async () => {
+    const t = initConvexTest();
+    for (let i = 0; i < 3; i++) await append(t, `s${i}`);
+    const page = await t.query(api.batches.history, { room: "r", limit: NaN });
+    expect(page.batches).toHaveLength(3);
+    expect(page.next).toBeNull();
+  });
+
   test("filters to one stream and pages by seq", async () => {
     const t = initConvexTest();
     for (let i = 0; i < 5; i++) {
@@ -267,6 +275,71 @@ describe("cleanup", () => {
           async (ctx) => (await ctx.db.query("batches").take(1)).length,
         ),
       ).toBe(0);
+    });
+
+    test("history returns short pages instead of passing the read limit", async () => {
+      const t = initStrict();
+      await insertBig(t);
+      for (const stream of [undefined, "s0"]) {
+        const sizes: number[] = [];
+        let after: Cursor | undefined;
+        for (;;) {
+          const page = await t.query(api.batches.history, {
+            room: "r",
+            stream,
+            after,
+          });
+          sizes.push(page.batches.length);
+          if (!page.next) break;
+          after = page.next;
+        }
+        // About 14 batches fit in one read, so the room takes a few pages.
+        expect(sizes.reduce((a, b) => a + b)).toBe(stream ? 10 : 30);
+        if (!stream) expect(sizes[0]).toBeLessThan(30);
+      }
+    });
+
+    test("a room clear carries on past big batches it keeps", async () => {
+      const t = initStrict();
+      const insert = (stream: string, seq: number, v: string) =>
+        t.run(async (ctx) => {
+          await ctx.db.insert("batches", {
+            room: "r",
+            stream,
+            seq,
+            start: T0,
+            end: T0,
+            samples: [{ t: 0, v }],
+          });
+        });
+      // Old batches in "b" (more than one chunk's worth) and "d".
+      for (let i = 0; i < 150; i++) await insert("b", i, "old");
+      for (let i = 0; i < 10; i++) await insert("d", i, "old");
+      vi.setSystemTime(Date.now() + 1_000);
+      await t.mutation(api.streams.clear, { room: "r" }); // first chunk only
+      // Before the next chunk runs, someone draws big batches into "a" and
+      // "c", more than one transaction can read. The clear keeps those, and
+      // must neither start again from "a" nor stop at "c".
+      vi.setSystemTime(Date.now() + 500);
+      for (let i = 0; i < 20; i++) {
+        await insert("a", i, big);
+        await insert("c", i, big);
+      }
+      await t.finishAllScheduledFunctions(vi.runAllTimers);
+      const has = (stream: string) =>
+        t.run(
+          async (ctx) =>
+            (await ctx.db
+              .query("batches")
+              .withIndex("by_stream", (q) =>
+                q.eq("room", "r").eq("stream", stream),
+              )
+              .first()) !== null,
+        );
+      expect(await has("b")).toBe(false);
+      expect(await has("d")).toBe(false);
+      expect(await has("a")).toBe(true);
+      expect(await has("c")).toBe(true);
     });
 
     test("the expiry cron stays under the read limit", async () => {

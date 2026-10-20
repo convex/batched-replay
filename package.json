@@ -1,7 +1,10 @@
 {
   "name": "@convex-dev/batched-replay",
-  "description": "A replay component for Convex.",
-  "repository": "github:get-convex/batched-replay",
+  "description": "Batch fast-changing values (cursors, pen strokes, game movement) into a few writes a second and replay them smoothly, live or later.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/get-convex/batched-replay.git"
+  },
   "homepage": "https://github.com/get-convex/batched-replay#readme",
   "bugs": {
     "url": "https://github.com/get-convex/batched-replay/issues"
@@ -10,7 +13,15 @@
   "license": "Apache-2.0",
   "keywords": [
     "convex",
-    "component"
+    "component",
+    "realtime",
+    "multiplayer",
+    "cursors",
+    "replay",
+    "presence",
+    "collaboration",
+    "drawing",
+    "react"
   ],
   "type": "module",
   "scripts": {
@@ -28,6 +39,7 @@
     "test:debug": "vitest --inspect-brk --no-file-parallelism",
     "test:coverage": "vitest run --coverage --coverage.reporter=text",
     "prepare": "npm run build",
+    "prepublishOnly": "npm run build:clean",
     "preversion": "npm ci && npm run build:clean && npm run test && npm run lint && npm run typecheck",
     "alpha": "npm version prerelease --preid alpha && npm publish --tag alpha && git push --follow-tags",
     "release": "npm version patch && npm publish && git push --follow-tags",
@@ -35,7 +47,9 @@
   },
   "files": [
     "dist",
-    "src"
+    "src",
+    "!src/**/*.test.ts",
+    "CHANGELOG.md"
   ],
   "exports": {
     "./package.json": "./package.json",
@@ -66,6 +80,11 @@
   "peerDependencies": {
     "convex": "^1.43.0",
     "react": "^18.3.1 || ^19.0.0"
+  },
+  "peerDependenciesMeta": {
+    "react": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "@convex-dev/eslint-plugin": "^5.0.0",

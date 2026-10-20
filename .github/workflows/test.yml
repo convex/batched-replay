@@ -27,7 +27,7 @@ jobs:
 
       - name: Install and build
         run: |
-          npm i
+          npm ci
           npm run build
       - name: Publish package for testing branch
         run: npx pkg-pr-new publish || echo "pkg-pr-new failed"
