@@ -95,6 +95,11 @@ game laps or checkpoints, sensor rollups and alerts, last-seen presence,
 moderation flags, or scheduling an agent when something finishes.
 
 ```ts
+import { v } from "convex/values";
+import { exposeApi } from "@convex-dev/batched-replay";
+import { components } from "./_generated/api";
+import type { MutationCtx } from "./_generated/server";
+
 export const { append, latest, history, streams } = exposeApi(
   components.batchedReplay,
   {
@@ -142,7 +147,8 @@ The rules, most important first:
 - **A throw rolls back the append**, and stalls that person's stream for
   everyone while their sender retries it. Wrap best-effort work in
   `try`/`catch`, or hand it to `ctx.scheduler.runAfter(0, ...)`.
-- **Key rows by `(stream, seq)`**, so the hook is idempotent.
+- **No duplicates to guard against.** The hook runs once per stored batch,
+  inside the same transaction, and Convex runs a mutation at most once.
 - **Ordering is per stream**, by `seq`. Batches from different streams can
   arrive in any order.
 - **A batch is not an event.** A stroke spans many batches, so collect it per

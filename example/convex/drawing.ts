@@ -36,13 +36,18 @@ export const { append, latest, history, streams } = exposeApi(
     // openStrokes document until the pen goes up.
     onAppend: async (
       ctx: MutationCtx,
-      { room, stream, seq, start, samples },
+      { room, stream, seq, start, samples, dropped },
     ) => {
       const open = await ctx.db
         .query("openStrokes")
         .withIndex("by_stream", (q) => q.eq("room", room).eq("stream", stream))
         .unique();
-      let stroke = open && { startSeq: open.startSeq, points: open.points };
+      // If a clear dropped the start of this batch, the open stroke was cut:
+      // start afresh rather than joining across the gap.
+      let stroke =
+        open && dropped === 0
+          ? { startSeq: open.startSeq, points: open.points }
+          : null;
 
       for (const { t, v: sample } of samples) {
         const point = { x: sample.x, y: sample.y };

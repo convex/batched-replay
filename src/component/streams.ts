@@ -6,14 +6,19 @@ import {
   query,
   type MutationCtx,
 } from "./_generated/server.js";
-import { CHUNK, nearReadLimit, streamListValidator } from "./shared.js";
+import {
+  CHUNK,
+  clampCount,
+  nearReadLimit,
+  streamListValidator,
+} from "./shared.js";
 
 // The room's most recently active streams, newest first, and its epoch.
 export const list = query({
   args: { room: v.string(), limit: v.optional(v.number()) },
   returns: streamListValidator,
   handler: async (ctx, args) => {
-    const limit = Math.min(Math.max(args.limit ?? 100, 1), 1_000);
+    const limit = clampCount(args.limit, 100, 1_000);
     const docs = await ctx.db
       .query("streams")
       .withIndex("by_room_lastEnd", (q) => q.eq("room", args.room))
