@@ -1,6 +1,10 @@
-import { expect, test } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
 import { initConvexTest } from "./setup.test";
-import { api } from "./_generated/api";
+import { api, internal } from "./_generated/api";
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 type Car = { x: number; y: number; angle: number; lapMs?: number };
 const car = (x: number, lapMs?: number): Car => ({ x, y: 0, angle: 0, lapMs });
@@ -74,4 +78,40 @@ test("a sample that isn't a car is rejected", async () => {
       duration: 100,
     }),
   ).rejects.toThrow(/Validator/);
+});
+
+test("a player keeps their newest 20 laps, and always their best", async () => {
+  const t = initConvexTest();
+  // The first lap is the best; the rest are slower.
+  await drive(t, "me:1", [car(3, 5_000)]);
+  for (let lap = 2; lap <= 25; lap++) {
+    await drive(t, `me:${lap}`, [car(3, 9_000 + lap)]);
+  }
+  const laps = await t.run((ctx) => ctx.db.query("laps").collect());
+  expect(laps.map((l) => l.stream)).toEqual([
+    "me:1",
+    ...Array.from({ length: 19 }, (_, i) => `me:${i + 7}`),
+  ]);
+  const { best } = await t.query(api.racer.laps, { player: "me" });
+  expect(best).toEqual({ stream: "me:1", lapMs: 5_000 });
+});
+
+test("old laps are deleted while their history is still there", async () => {
+  vi.useFakeTimers();
+  const t = initConvexTest();
+  await drive(t, "me:1", [car(3, 8_000)]);
+  vi.advanceTimersByTime(21 * 60 * 60_000);
+  await drive(t, "me:2", [car(3, 9_000)]);
+
+  await t.mutation(internal.racer.deleteOldLaps, {});
+  const { best, recent } = await t.query(api.racer.laps, { player: "me" });
+  expect(best).toEqual({ stream: "me:2", lapMs: 9_000 });
+  expect(recent.map((lap) => lap.stream)).toEqual(["me:2"]);
+  // The lap went before its batches, which are kept for a day.
+  const page = await t.query(api.racer.history, {
+    room: "racer-demo",
+    stream: "me:1",
+  });
+  expect(page.batches).toHaveLength(1);
+  expect(page.batches[0].expiresAt).toBe(page.batches[0].end + 86_400_000);
 });

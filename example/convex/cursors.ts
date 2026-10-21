@@ -1,6 +1,8 @@
 import { v } from "convex/values";
 import { components } from "./_generated/api.js";
 import { exposeApi } from "@convex-dev/batched-replay";
+import type { MutationCtx } from "./_generated/server.js";
+import { limitAppends, limitSamples } from "./limits.js";
 
 // Re-export the component's API so the React hooks can call it.
 export const { append, latest, history, streams } = exposeApi(
@@ -13,9 +15,12 @@ export const { append, latest, history, streams } = exposeApi(
     // The demo has no sign-in: anyone can watch, and each tab picks its own
     // anonymous stream key. See the README for the signed-in version.
     authorizeRead: async () => {},
-    authorizeWrite: async (_ctx, { stream }) => {
+    authorizeWrite: async (ctx: MutationCtx, { stream }) => {
       if (!stream) throw new Error("A stream key is required");
+      // The demo is public, so each stream gets a rate limit: see limits.ts.
+      await limitAppends(ctx, "cursors", stream);
       return stream;
     },
+    onAppend: async (_ctx, { samples }) => limitSamples(samples),
   },
 );

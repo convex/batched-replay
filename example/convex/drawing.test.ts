@@ -1,6 +1,6 @@
 import { afterEach, expect, test, vi } from "vitest";
 import { initConvexTest } from "./setup.test";
-import { api } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 
 type Pen = { k: "down" | "move" | "up"; x: number; y: number };
 
@@ -166,11 +166,12 @@ test("after Clear board the snapshot is empty, and a stroke cut by the clear sta
 
 test("a very long stroke is thinned out instead of growing forever", async () => {
   const t = initConvexTest();
-  const moves = Array.from({ length: 1_000 }, (_, i) => ({
+  // 5,000 points, in batches as big as the demo allows.
+  const moves = Array.from({ length: 500 }, (_, i) => ({
     t: 0,
     v: { k: "move" as const, x: i, y: 0 },
   }));
-  for (let i = 0; i < 5; i++) {
+  for (let i = 0; i < 10; i++) {
     await t.mutation(api.drawing.append, {
       room: "drawing-demo",
       stream: "me",
@@ -180,4 +181,98 @@ test("a very long stroke is thinned out instead of growing forever", async () =>
   }
   const [pen] = await t.run((ctx) => ctx.db.query("pens").collect());
   expect(pen.stroke!.points.length).toBeLessThanOrEqual(2_000);
+});
+
+test("tidy clears the board once it's been idle for ten minutes, like Clear board", async () => {
+  vi.useFakeTimers();
+  const t = initConvexTest();
+  const send = (stream: string, samples: { t: number; v: Pen }[]) =>
+    t.mutation(api.drawing.append, {
+      room: "drawing-demo",
+      stream,
+      samples,
+      duration: 100,
+    });
+  await send("a", [
+    { t: 0, v: { k: "down", x: 0, y: 0 } },
+    { t: 50, v: { k: "up", x: 10, y: 0 } },
+  ]);
+  await send("b", [{ t: 0, v: { k: "down", x: 5, y: 5 } }]);
+
+  // Nine minutes on, the board is left alone.
+  vi.advanceTimersByTime(9 * 60_000);
+  await t.mutation(internal.drawing.tidy, {});
+  expect((await t.query(api.drawing.snapshot, {})).strokes).toHaveLength(1);
+
+  // Past ten, it's cleared: snapshot, batches and pens, and every viewer
+  // starts again. The finished stroke stays in the gallery.
+  vi.advanceTimersByTime(2 * 60_000);
+  await t.mutation(internal.drawing.tidy, {});
+  expect(await t.query(api.drawing.snapshot, {})).toEqual({
+    strokes: [],
+    pens: [],
+  });
+  expect(await t.query(api.drawing.streams, { room: "drawing-demo" })).toEqual({
+    epoch: 1,
+    streams: [],
+  });
+  expect(await t.run((ctx) => ctx.db.query("pens").collect())).toEqual([]);
+  expect(await t.query(api.drawing.recentStrokes, {})).toHaveLength(1);
+
+  // An empty board isn't cleared again, so viewers aren't reset each minute.
+  vi.advanceTimersByTime(60 * 60_000);
+  await t.mutation(internal.drawing.tidy, {});
+  expect(
+    (await t.query(api.drawing.streams, { room: "drawing-demo" })).epoch,
+  ).toBe(1);
+
+  // Drawing carries on from the new board, and the snapshot and the
+  // history agree on it.
+  await send("b", [
+    { t: 0, v: { k: "move", x: 6, y: 6 } },
+    { t: 50, v: { k: "up", x: 7, y: 7 } },
+  ]);
+  const snapshot = await t.query(api.drawing.snapshot, {});
+  expect(snapshot.strokes.map((s) => s.points)).toEqual([
+    [
+      { x: 6, y: 6 },
+      { x: 7, y: 7 },
+    ],
+  ]);
+  const [last] = await t.query(api.drawing.latest, {
+    room: "drawing-demo",
+    stream: "b",
+  });
+  expect(snapshot.pens).toEqual([{ stream: "b", seq: last.seq, points: [] }]);
+});
+
+test("tidy keeps the current board and the newest 100 strokes before it", async () => {
+  vi.useFakeTimers();
+  const t = initConvexTest();
+  const send = (samples: { t: number; v: Pen }[]) =>
+    t.mutation(api.drawing.append, {
+      room: "drawing-demo",
+      stream: "me",
+      samples,
+      duration: 100,
+    });
+  // 120 strokes, numbered by x, then a clear and one more on the new board.
+  const strokes = Array.from({ length: 120 }, (_, x) => [
+    { t: 0, v: { k: "down" as const, x, y: 0 } },
+    { t: 0, v: { k: "up" as const, x, y: 1 } },
+  ]).flat();
+  await send(strokes);
+  await t.mutation(api.drawing.clear, {});
+  vi.advanceTimersByTime(1_000);
+  await send([
+    { t: 0, v: { k: "down", x: 999, y: 0 } },
+    { t: 0, v: { k: "up", x: 999, y: 1 } },
+  ]);
+
+  await t.mutation(internal.drawing.tidy, {});
+  const kept = await t.run((ctx) => ctx.db.query("strokes").collect());
+  const xs = kept.map((s) => s.points[0].x).sort((a, b) => a - b);
+  // The oldest 20 went; the current board's stroke is still drawn.
+  expect(xs).toEqual([...Array.from({ length: 100 }, (_, i) => i + 20), 999]);
+  expect((await t.query(api.drawing.snapshot, {})).strokes).toHaveLength(1);
 });

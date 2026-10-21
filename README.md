@@ -8,6 +8,9 @@ replay each batch with its original timing. It looks smooth and live, runs a
 little behind, and costs a handful of writes a second instead of 60. Batches are
 kept, so a whole session can be replayed later.
 
+**Live demo:** [https://DEMO_URL](https://DEMO_URL) (cursors, a shared drawing
+board, a ghost racer and a phone-tilt marble).
+
 Found a bug? Feature request?
 [File it here](https://github.com/convex/batched-replay/issues).
 
@@ -16,6 +19,9 @@ Found a bug? Feature request?
 ![Two tabs: tab A draws a smiley, tab B replays each stroke about 300 ms behind, and both Strokes sidebars fill in from onAppend](docs/drawing-demo.gif)
 
 The example's drawing board in two tabs, from about 4 writes a second.
+
+**Live demo:** [https://DEMO_URL](https://DEMO_URL). Open it in two tabs, or
+open `#marble` on a laptop and steer it with your phone.
 
 ## Install
 

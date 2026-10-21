@@ -8,6 +8,7 @@ import {
   type MutationCtx,
   type QueryCtx,
 } from "./_generated/server.js";
+import { limitAppends, limitSamples } from "./limits.js";
 
 const ROOM = "drawing-demo";
 // A long stroke is thinned out rather than allowed to grow without limit, so
@@ -16,11 +17,20 @@ const MAX_POINTS = 2_000;
 // Plenty for a demo board. A bigger one would load its strokes a page at a
 // time.
 const MAX_BOARD_STROKES = 1_000;
+// The demo is public, so the shared board doesn't keep anything up for long:
+// once nobody has drawn for this long, a cron clears it (see tidy below).
+const IDLE_CLEAR_MS = 10 * 60_000;
+// The Strokes gallery keeps the current board's strokes, plus this many of
+// the newest from earlier boards.
+const GALLERY_STROKES = 100;
+// The most documents tidy deletes in one go. It runs again if there's more.
+const TIDY_CHUNK = 100;
 
 type Point = { x: number; y: number };
 const point = v.object({ x: v.number(), y: v.number() });
 
-// Drawings are kept forever (no retentionMs), so any session can be replayed.
+// No retentionMs: a board's batches are kept until it's cleared, by hand or
+// by tidy once the board has been idle, so the board so far can be replayed.
 export const { append, latest, history, streams } = exposeApi(
   components.batchedReplay,
   {
@@ -32,8 +42,10 @@ export const { append, latest, history, streams } = exposeApi(
     }),
     // Same anonymous pattern as cursors.ts: the demo has no sign-in.
     authorizeRead: async () => {},
-    authorizeWrite: async (_ctx, { stream }) => {
+    authorizeWrite: async (ctx: MutationCtx, { stream }) => {
       if (!stream) throw new Error("A stream key is required");
+      // The same public limits as cursors.ts.
+      await limitAppends(ctx, "drawing", stream);
       return stream;
     },
     // Runs inside every append, after the batch is stored. A stroke spans
@@ -44,6 +56,7 @@ export const { append, latest, history, streams } = exposeApi(
       ctx: MutationCtx,
       { room, stream, seq, start, samples, dropped },
     ) => {
+      limitSamples(samples);
       const board = await currentBoard(ctx, room);
       const pen = await ctx.db
         .query("pens")
@@ -229,3 +242,60 @@ async function deleteSomeStrokes(ctx: MutationCtx) {
     await ctx.scheduler.runAfter(0, internal.drawing.clearMoreStrokes, {});
   }
 }
+
+// Runs every minute from crons.ts, so the public board looks after itself.
+// Clears the board once nobody has drawn on it for IDLE_CLEAR_MS, the same
+// way "Clear board" does, so the snapshot and the batches stay in step. Then
+// trims the gallery and deletes the pens left on earlier boards.
+export const tidy = internalMutation({
+  args: {},
+  returns: v.null(),
+  handler: async (ctx) => {
+    // Every append writes its stream's pen on the current board, so no pen
+    // there means the board is empty, and there's nothing to clear.
+    let board = await currentBoard(ctx, ROOM);
+    const drawnOn = await ctx.db
+      .query("pens")
+      .withIndex("by_board", (q) => q.eq("room", ROOM).eq("board", board))
+      .first();
+    // Newest first, so the first stream is the last one to draw.
+    const { streams } = await new BatchedReplay(
+      components.batchedReplay,
+    ).streams(ctx, { room: ROOM, limit: 1 });
+    const lastDrawnAt = streams[0]?.lastEnd ?? 0;
+    if (drawnOn && lastDrawnAt < Date.now() - IDLE_CLEAR_MS) {
+      await clearBoard(ctx);
+      board++;
+    }
+
+    // A stream's pen on an earlier board is never read again: its next
+    // append starts afresh either way.
+    const oldPens = await ctx.db
+      .query("pens")
+      .withIndex("by_board", (q) => q.eq("room", ROOM).lt("board", board))
+      .take(TIDY_CHUNK);
+    for (const pen of oldPens) await ctx.db.delete("pens", pen._id);
+
+    // The current board's strokes are its snapshot, so only earlier boards'
+    // strokes are trimmed, newest kept.
+    const earlierStrokes = ctx.db
+      .query("strokes")
+      .withIndex("by_board", (q) => q.eq("room", ROOM).lt("board", board))
+      .order("desc");
+    let kept = 0;
+    let deleted = 0;
+    for await (const stroke of earlierStrokes) {
+      if (kept < GALLERY_STROKES) {
+        kept++;
+        continue;
+      }
+      await ctx.db.delete("strokes", stroke._id);
+      if (++deleted === TIDY_CHUNK) break;
+    }
+
+    if (oldPens.length === TIDY_CHUNK || deleted === TIDY_CHUNK) {
+      await ctx.scheduler.runAfter(0, internal.drawing.tidy, {});
+    }
+    return null;
+  },
+});

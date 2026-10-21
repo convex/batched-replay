@@ -1,6 +1,8 @@
 import { v } from "convex/values";
 import { exposeApi } from "@convex-dev/batched-replay";
 import { components } from "./_generated/api.js";
+import type { MutationCtx } from "./_generated/server.js";
+import { limitAppends, limitSamples } from "./limits.js";
 
 // A phone's tilt, played back on the laptop to roll a marble.
 export const { append, latest, history, streams } = exposeApi(
@@ -17,9 +19,12 @@ export const { append, latest, history, streams } = exposeApi(
     retentionMs: 10 * 60_000,
     // Same anonymous pattern as cursors.ts: the demo has no sign-in.
     authorizeRead: async () => {},
-    authorizeWrite: async (_ctx, { stream }) => {
+    authorizeWrite: async (ctx: MutationCtx, { stream }) => {
       if (!stream) throw new Error("A stream key is required");
+      // The same public limits as cursors.ts.
+      await limitAppends(ctx, "tilt", stream);
       return stream;
     },
+    onAppend: async (_ctx, { samples }) => limitSamples(samples),
   },
 );

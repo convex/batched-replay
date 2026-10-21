@@ -22,6 +22,45 @@ own `exposeApi` and `value`: the only real difference is what it sends.
   rolls a marble round a maze with it. The phone switches between 250 ms and 50
   ms flushes, to feel the difference while steering.
 
+## Hosted demo
+
+The same app runs as a public demo at [https://DEMO_URL](https://DEMO_URL),
+served from its own Convex deployment by the
+[static hosting component](https://www.npmjs.com/package/@convex-dev/static-hosting)
+(mounted in `convex/convex.config.ts`). It's HTTPS, so the phone half of the
+tilt marble works straight away.
+
+To deploy it, from the root of the repo:
+
+```sh
+npm run deploy:demo
+```
+
+That builds the component (`dist`, which the example imports), then
+`npx @convex-dev/static-hosting deploy` deploys the backend, builds the page
+with `npm run build:demo` and the production `VITE_CONVEX_URL`, and uploads
+`example/dist`. It deploys to the production deployment of whichever project the
+CLI points at, so either run it logged in (`npx convex login`) with
+`CONVEX_DEPLOYMENT` set to the demo project, or set `CONVEX_DEPLOY_KEY` to a
+production deploy key for that project.
+
+Anyone can open it and there's no sign-in, so it has some limits:
+
+- **Rate limits** (`convex/limits.ts`, with `@convex-dev/rate-limiter`): each
+  stream key gets 100 appends a second for cursors (the slider goes down to a 16
+  ms flush), 40 for tilt (50 ms at its fastest) and 10 for drawing and the racer
+  (250 ms). A rate limited append throws, and the sender retries a little later.
+  A batch can carry at most 500 samples.
+- **Drawing**: a cron (`convex/crons.ts`) clears the board once nobody has drawn
+  on it for 10 minutes, the same way "Clear board" does. The Strokes gallery
+  keeps the current board's strokes and the newest 100 before it.
+- **Racer**: a lap's batches are kept for a day. A player keeps their newest 20
+  laps (and always their best), and laps are deleted after 20 hours, before
+  their history expires, so a ghost never points at a lap that's gone.
+- **Cursors and tilt** keep their batches for 10 minutes.
+- **Housekeeping**: pens left on earlier boards and rate limit documents more
+  than an hour old are deleted by the crons too.
+
 ## Recording the racer
 
 `#racer?autodrive=1` drives itself round the middle of the track, one lap every
@@ -68,6 +107,7 @@ permission, from the "Use the tilt sensor" button). An HTTPS page can only talk
 to Convex over `wss://`, so a local `ws://` backend from
 `npx convex dev --local` won't work from the phone. What does work:
 
+- The [hosted demo](#hosted-demo), which is already HTTPS.
 - A Convex cloud dev deployment (its URL is already `https://`/`wss://`), plus
   the Vite dev server behind an HTTPS tunnel (Cloudflare Tunnel, ngrok,
   Tailscale Funnel) that the phone opens.
