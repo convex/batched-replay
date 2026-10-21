@@ -1,0 +1,279 @@
+/* The 3D marble demo (#marble) and its phone controller (#tilt). */
+.marble-stage {
+  position: fixed;
+  inset: 0;
+  background: radial-gradient(120% 90% at 60% 40%, #141c2e 0%, #0a0d16 70%);
+}
+.marble-stage canvas {
+  display: block;
+}
+
+/* A glassy HUD panel. */
+.hud.marble-hud {
+  top: 20px;
+  left: 20px;
+  width: 320px;
+  padding: 18px 20px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font:
+    14px/1.4 system-ui,
+    -apple-system,
+    sans-serif;
+  color: #c9cfdd;
+  background: linear-gradient(160deg, #1b2236cc, #0d1120d9);
+  border: 1px solid #ffffff1f;
+  border-radius: 16px;
+  box-shadow:
+    0 20px 50px #0008,
+    inset 0 1px 0 #ffffff14;
+  backdrop-filter: blur(14px) saturate(140%);
+  -webkit-backdrop-filter: blur(14px) saturate(140%);
+  font-variant-numeric: tabular-nums;
+}
+.marble-hud h1 {
+  margin: 0 0 4px;
+  font-size: 17px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: #fff;
+}
+.marble-hud h1::before {
+  content: "";
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  margin: 0 9px 1px 0;
+  border-radius: 50%;
+  background: #f3b01c;
+  box-shadow: 0 0 10px #f3b01c;
+}
+.marble-phone {
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: #ffffff0d;
+  border: 1px solid #ffffff14;
+}
+.marble-phone strong {
+  display: block;
+  margin-top: 2px;
+  color: #f3b01c;
+  font-weight: 600;
+  word-break: break-all;
+}
+.marble-note {
+  font-size: 12px;
+  color: #8b93a7;
+}
+.marble-tilt {
+  color: #fff;
+  font-weight: 600;
+}
+.marble-flush,
+.marble-delay {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.marble-flush::before,
+.marble-delay::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #8d2676;
+  box-shadow: 0 0 8px #c23aa8;
+}
+.marble-delay::before {
+  background: #ee342f;
+  box-shadow: 0 0 8px #ee342f;
+}
+.marble-run {
+  margin-top: 4px;
+  padding-top: 10px;
+  border-top: 1px solid #ffffff17;
+  font-size: 16px;
+  font-weight: 600;
+  color: #fff;
+}
+
+/* The phone's tilt controller: big and easy to hit with a thumb. */
+.phone-tilt {
+  position: fixed;
+  inset: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  padding: max(64px, env(safe-area-inset-top)) 18px
+    max(20px, env(safe-area-inset-bottom));
+  box-sizing: border-box;
+  font:
+    17px/1.35 system-ui,
+    -apple-system,
+    sans-serif;
+  color: #dfe4ef;
+  background:
+    radial-gradient(90% 50% at 50% 30%, #2a1b3d88 0%, transparent 70%),
+    radial-gradient(80% 50% at 50% 100%, #3a250a66 0%, transparent 70%),
+    linear-gradient(180deg, #10152a, #080a12);
+  -webkit-tap-highlight-color: transparent;
+  font-variant-numeric: tabular-nums;
+}
+.phone-tilt-header {
+  width: min(100%, 420px);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.phone-tilt h1 {
+  margin: 0;
+  font-size: 26px;
+  font-weight: 750;
+  letter-spacing: -0.02em;
+  color: #fff;
+}
+.phone-tilt-eyebrow {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #f3b01c;
+}
+.phone-tilt-you {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 11px;
+  font-size: 13px;
+  color: #c9cfdd;
+  background: #ffffff10;
+  border: 1px solid #ffffff1a;
+  border-radius: 999px;
+}
+.phone-tilt-you i {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+}
+.phone-tilt-pad {
+  position: relative;
+  width: min(100%, 420px, 46dvh);
+  aspect-ratio: 1;
+  flex: none;
+  border-radius: 28px;
+  overflow: hidden;
+  touch-action: none;
+  cursor: grab;
+  background: radial-gradient(70% 70% at 50% 40%, #1d2640, #0b0f1c);
+  border: 1px solid #ffffff1c;
+  box-shadow:
+    0 24px 60px #000a,
+    inset 0 1px 0 #ffffff1a;
+}
+.phone-tilt-pad canvas {
+  display: block;
+}
+.phone-tilt-reading {
+  position: absolute;
+  left: 50%;
+  bottom: 12px;
+  transform: translateX(-50%);
+  white-space: nowrap;
+  padding: 6px 14px;
+  font-size: 14px;
+  font-weight: 600;
+  color: #fff;
+  background: #0b0f1cb3;
+  border: 1px solid #ffffff1a;
+  border-radius: 999px;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  pointer-events: none;
+}
+.phone-tilt-status {
+  margin: 0;
+  min-height: 1.35em;
+  text-align: center;
+  color: #aab2c5;
+}
+.phone-tilt-start {
+  width: min(100%, 420px);
+  padding: 18px;
+  font: inherit;
+  font-size: 19px;
+  font-weight: 700;
+  color: #fff;
+  border: 0;
+  text-shadow: 0 1px 2px #0006;
+  border-radius: 18px;
+  background: linear-gradient(100deg, #f37b1c, #ee342f 45%, #8d2676);
+  box-shadow:
+    0 12px 30px #ee342f44,
+    inset 0 1px 0 #ffffff40;
+  cursor: pointer;
+}
+.phone-tilt-start:active {
+  transform: scale(0.98);
+}
+.phone-tilt-flush {
+  position: relative;
+  width: min(100%, 420px);
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  padding: 5px;
+  box-sizing: border-box;
+  background: #ffffff0d;
+  border: 1px solid #ffffff1c;
+  border-radius: 20px;
+}
+.phone-tilt-flush::before {
+  content: "";
+  position: absolute;
+  top: 5px;
+  bottom: 5px;
+  left: 5px;
+  width: calc(50% - 5px);
+  border-radius: 15px;
+  background: linear-gradient(180deg, #ffc94a, #f3b01c);
+  box-shadow: 0 6px 18px #f3b01c55;
+  transition: transform 0.28s cubic-bezier(0.3, 1.4, 0.5, 1);
+}
+.phone-tilt-flush.fast::before {
+  transform: translateX(100%);
+}
+.phone-tilt-flush button {
+  position: relative;
+  padding: 16px 0;
+  font: inherit;
+  font-size: 24px;
+  font-weight: 750;
+  color: #aab2c5;
+  background: none;
+  border: 0;
+  cursor: pointer;
+  transition: color 0.2s;
+}
+.phone-tilt-flush button[aria-pressed="true"] {
+  color: #1a1206;
+}
+.phone-tilt-rate {
+  width: min(100%, 420px);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  text-align: center;
+}
+.phone-tilt-rate strong {
+  font-size: 22px;
+  font-weight: 750;
+  color: #fff;
+}
+.phone-tilt-rate span {
+  font-size: 14px;
+  color: #8b93a7;
+}

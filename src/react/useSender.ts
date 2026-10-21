@@ -25,21 +25,28 @@ export function useSender<V>(
     sampleMs?: number;
     /** Called when a send fails. It's retried, with backoff. */
     onError?: (error: unknown) => void;
+    /** Called as each batch goes out (one write), e.g. to count writes. */
+    onSend?: (batch: { samples: Sample<V>[]; duration: number }) => void;
   },
 ) {
   const appendMutation = useMutation(append);
   const appendRef = useRef(appendMutation);
   const onErrorRef = useRef(options.onError);
+  const onSendRef = useRef(options.onSend);
   useEffect(() => {
     appendRef.current = appendMutation;
     onErrorRef.current = options.onError;
+    onSendRef.current = options.onSend;
   });
   const senderRef = useRef<Sender<V> | null>(null);
   const { room, stream, flushMs, sampleMs } = options;
 
   useEffect(() => {
     const sender = new Sender<V>({
-      send: (batch) => appendRef.current({ room, stream, ...batch }),
+      send: (batch) => {
+        onSendRef.current?.(batch);
+        return appendRef.current({ room, stream, ...batch });
+      },
       onError: (error) => onErrorRef.current?.(error),
       flushMs,
       sampleMs,

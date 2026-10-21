@@ -9,21 +9,30 @@ handful of writes a second instead of 60. Because the batches are kept, you can
 also replay a whole session later (a drawing timelapse, a racing-game ghost).
 
 Prior art to credit and learn from, not copy:
-- AI Town's `HistoricalObject` and engine playback (server-side game loop, one write a second).
-- https://github.com/get-convex/multiplayer-cursors (Sujay and Ian, 2024): server timestamps, adaptive playback clock.
-- https://github.com/Iann29/convex-multiplayer-cursors: a cursors-only component (x, y only).
+
+- AI Town's `HistoricalObject` and engine playback (server-side game loop, one
+  write a second).
+- https://github.com/get-convex/multiplayer-cursors (Sujay and Ian, 2024):
+  server timestamps, adaptive playback clock.
+- https://github.com/Iann29/convex-multiplayer-cursors: a cursors-only component
+  (x, y only).
 - Mike's 2025 video and https://github.com/mikecann/convex-realtime-cursors.
 
 What makes this one different: any data shape, several streams per room, the
-batches are kept (replay and history are first-class), and the sender and
-player cores are plain TypeScript with thin React hooks on top.
+batches are kept (replay and history are first-class), and the sender and player
+cores are plain TypeScript with thin React hooks on top.
 
 ## Concepts
 
-- **room**: a string the app picks. A set of streams watched together (a whiteboard, a game lobby, a page).
-- **stream**: a string key, unique within a room. One sender's sequence of samples (a user's cursor, a user's pen, one game entity). The app decides the key, usually from auth.
-- **sample**: `{ t, v }`. `t` is ms from the start of its batch, `v` is any Convex value the app chooses.
-- **batch**: one stored document holding a stream's samples for one flush window, stamped with server time.
+- **room**: a string the app picks. A set of streams watched together (a
+  whiteboard, a game lobby, a page).
+- **stream**: a string key, unique within a room. One sender's sequence of
+  samples (a user's cursor, a user's pen, one game entity). The app decides the
+  key, usually from auth.
+- **sample**: `{ t, v }`. `t` is ms from the start of its batch, `v` is any
+  Convex value the app chooses.
+- **batch**: one stored document holding a stream's samples for one flush
+  window, stamped with server time.
 
 ## Component schema (`src/component/schema.ts`)
 
@@ -56,24 +65,51 @@ rooms: defineTable({ room: v.string(), epoch: v.number() })  // bumped by clear
 
 Why two tables: the live per-stream query reads only `batches` for one stream,
 and the room's stream list reads only `streams`. So an append invalidates that
-one stream's subscriptions and nothing else, and the stream list changes at
-most every 5 s per stream rather than on every batch.
+one stream's subscriptions and nothing else, and the stream list changes at most
+every 5 s per stream rather than on every batch.
 
 ## Component functions
 
-Modules named after what they deal with: `batches.ts`, `streams.ts`, plus `crons.ts`.
+Modules named after what they deal with: `batches.ts`, `streams.ts`, plus
+`crons.ts`.
 
-- `batches.append` (mutation). Args `{ room, stream, samples, duration, retentionMs? }`. Returns `{ seq, start, end, dropped }`, or null when nothing was stored (`dropped` counts the leading samples captured before the room was last cleared).
-  - Validate: 1 to 2,000 samples, `t` within `[0, duration]` and non-decreasing, `0 <= duration <= 60_000`. Throw a clear error otherwise.
-  - `now = Date.now()`. Read the stream's latest batch (`by_stream` desc, first).
-  - `start = now - duration`. If a previous batch exists and `start < prev.end`, clamp `start = prev.end` so a stream's timeline never overlaps or goes backwards (this absorbs network jitter). If clamping would put `start` more than 1,000 ms after `now - duration`, re-anchor to `now - duration` instead (a one-off latency spike shouldn't push the stream into the future forever). `end = start + duration`.
-  - `seq = prev ? prev.seq + 1 : 0`. `expiresAt = retentionMs === undefined ? undefined : end + retentionMs`.
-  - Upsert the `streams` doc: insert on first batch, otherwise patch `lastEnd` only if it's more than 5,000 ms old.
-- `batches.latest` (query). Args `{ room, stream, count? }` (default 1, max 20). The newest `count` batches for one stream, oldest first. This is the live subscription. A watcher that misses an intermediate query update fills the gap by `seq` from `history`, so one is enough: a load test at 50 people (2026-10-20) showed 2 doubled each viewer's bandwidth for nothing.
-- `batches.history` (query). Args `{ room, stream?, after?, limit? }`. Batches in timeline order for a room (or one stream), for replays. Use convex-helpers' `paginator` or an explicit cursor, since `.paginate()` doesn't work inside components. Must not skip batches that share a `start`.
-- `streams.list` (query). Args `{ room, limit? }`. Returns `{ epoch, streams }`: the `limit` (default 100) most recently active streams, newest first, with `firstStart` and `lastEnd`. The client decides which are active.
-- `streams.clear` (mutation). Args `{ room, stream? }`. Delete a stream's (or a whole room's) batches and stream docs, in bounded chunks, rescheduling itself if there's more (for "clear the canvas"). The last chunk bumps the room's epoch.
-- `crons.ts`: every minute, delete batches with `expiresAt < now` in bounded chunks (reschedule if more remain), then (in a separate mutation) delete the `streams` docs of streams with no batches left.
+- `batches.append` (mutation). Args
+  `{ room, stream, samples, duration, retentionMs? }`. Returns
+  `{ seq, start, end, dropped }`, or null when nothing was stored (`dropped`
+  counts the leading samples captured before the room was last cleared).
+  - Validate: 1 to 2,000 samples, `t` within `[0, duration]` and non-decreasing,
+    `0 <= duration <= 60_000`. Throw a clear error otherwise.
+  - `now = Date.now()`. Read the stream's latest batch (`by_stream` desc,
+    first).
+  - `start = now - duration`. If a previous batch exists and `start < prev.end`,
+    clamp `start = prev.end` so a stream's timeline never overlaps or goes
+    backwards (this absorbs network jitter). If clamping would put `start` more
+    than 1,000 ms after `now - duration`, re-anchor to `now - duration` instead
+    (a one-off latency spike shouldn't push the stream into the future forever).
+    `end = start + duration`.
+  - `seq = prev ? prev.seq + 1 : 0`.
+    `expiresAt = retentionMs === undefined ? undefined : end + retentionMs`.
+  - Upsert the `streams` doc: insert on first batch, otherwise patch `lastEnd`
+    only if it's more than 5,000 ms old.
+- `batches.latest` (query). Args `{ room, stream, count? }` (default 1, max 20).
+  The newest `count` batches for one stream, oldest first. This is the live
+  subscription. A watcher that misses an intermediate query update fills the gap
+  by `seq` from `history`, so one is enough: a load test at 50 people
+  (2026-10-20) showed 2 doubled each viewer's bandwidth for nothing.
+- `batches.history` (query). Args `{ room, stream?, after?, limit? }`. Batches
+  in timeline order for a room (or one stream), for replays. Use convex-helpers'
+  `paginator` or an explicit cursor, since `.paginate()` doesn't work inside
+  components. Must not skip batches that share a `start`.
+- `streams.list` (query). Args `{ room, limit? }`. Returns `{ epoch, streams }`:
+  the `limit` (default 100) most recently active streams, newest first, with
+  `firstStart` and `lastEnd`. The client decides which are active.
+- `streams.clear` (mutation). Args `{ room, stream? }`. Delete a stream's (or a
+  whole room's) batches and stream docs, in bounded chunks, rescheduling itself
+  if there's more (for "clear the canvas"). The last chunk bumps the room's
+  epoch.
+- `crons.ts`: every minute, delete batches with `expiresAt < now` in bounded
+  chunks (reschedule if more remain), then (in a separate mutation) delete the
+  `streams` docs of streams with no batches left.
 
 All public component functions have `args` and `returns` validators.
 
@@ -107,7 +143,8 @@ and its type flows through to the React hooks.
 
 ## Plain TS cores (`src/client/sender.ts`, `src/client/player.ts`)
 
-No React in these, so they work in any framework and are unit-testable with fake timers.
+No React in these, so they work in any framework and are unit-testable with fake
+timers.
 
 ### Sender
 
@@ -124,10 +161,16 @@ sender.flush()       // force now (on unmount, on pagehide)
 sender.dispose()
 ```
 
-- A window starts at the first `push` after the previous flush, so an idle sender sends nothing.
-- Flush `flushMs` after the window started. `duration = flushTime - windowStart`.
-- Single-flight: while a flush is in flight, keep collecting; the next flush goes as soon as it resolves (or at the next tick, whichever is later). If a flush fails, keep its samples and retry them with the next window (cap the buffer so it can't grow forever).
-- Discrete events (a click, a pen-up) are just values, and must never be dropped by `sampleMs` thinning.
+- A window starts at the first `push` after the previous flush, so an idle
+  sender sends nothing.
+- Flush `flushMs` after the window started.
+  `duration = flushTime - windowStart`.
+- Single-flight: while a flush is in flight, keep collecting; the next flush
+  goes as soon as it resolves (or at the next tick, whichever is later). If a
+  flush fails, keep its samples and retry them with the next window (cap the
+  buffer so it can't grow forever).
+- Discrete events (a click, a pen-up) are just values, and must never be dropped
+  by `sampleMs` thinning.
 
 ### Player
 
@@ -145,11 +188,27 @@ player.streams()                  // streams with any data
 player.stats()                    // { delayMs, bufferedMs per stream, samplesPerSecond, batchesPerSecond }
 ```
 
-- Clock: one room-wide playhead in server time, `playhead = estimatedServerNow - delayMs`. Estimate the server clock from each batch as it arrives: `offset = max over the last ~10 s of (batch._creationTime - localArrivalTime)`. `_creationTime` is when the server inserted it, which is a real server-time sample.
-- Samples are placed at `batch.start + sample.t` and emitted in order. Batches that arrive late but are still ahead of the playhead play normally. Samples already behind the playhead when they arrive are emitted immediately (so discrete events are never lost) unless they're more than a few seconds old.
+- Clock: one room-wide playhead in server time,
+  `playhead = estimatedServerNow - delayMs`. Estimate the server clock from each
+  batch as it arrives:
+  `offset = max over the last ~10 s of (batch._creationTime - localArrivalTime)`.
+  `_creationTime` is when the server inserted it, which is a real server-time
+  sample.
+- Samples are placed at `batch.start + sample.t` and emitted in order. Batches
+  that arrive late but are still ahead of the playhead play normally. Samples
+  already behind the playhead when they arrive are emitted immediately (so
+  discrete events are never lost) unless they're more than a few seconds old.
 - When a stream runs out of buffer, hold its last value.
-- Start-up: a new player shows each stream's last known value straight away rather than waiting.
-- Automatic delay (the default): the player measures how long after its first sample each live batch was in its hands, and plays the worst of the last 5 s plus 50 ms behind. That covers the flush window, network time and jitter without being told any of them, and follows a sender that changes its flush rate. It eases towards the target, growing faster (0.2 ms per ms) than it shrinks (0.05), because running dry shows as a stutter. The batches a new subscription delivers in one go don't count, since they were written before anyone was listening. Before any live batch it guesses one window plus 150 ms.
+- Start-up: a new player shows each stream's last known value straight away
+  rather than waiting.
+- Automatic delay (the default): the player measures how long after its first
+  sample each live batch was in its hands, and plays the worst of the last 5 s
+  plus 50 ms behind. That covers the flush window, network time and jitter
+  without being told any of them, and follows a sender that changes its flush
+  rate. It eases towards the target, growing faster (0.2 ms per ms) than it
+  shrinks (0.05), because running dry shows as a stutter. The batches a new
+  subscription delivers in one go don't count, since they were written before
+  anyone was listening. Before any live batch it guesses one window plus 150 ms.
 
 ### History replay
 
@@ -164,34 +223,63 @@ what the timelapse and ghost demos use.
 
 ## React (`src/react/index.ts`)
 
-- `useSender(appendMutationRef, { room, stream?, flushMs?, sampleMs? })` returns `send(value)`. Flushes on unmount and `pagehide`.
-- `usePlayback(api: { latest, streams, history? }, { room, self?, fromStart?, delayMs?, maxDelayMs?, interpolate?, onSample?, onReset? })`. Subscribes to `streams.list` once, then to `latest` for each active stream with `useQueries`, feeds a `Player`, ticks it on `requestAnimationFrame`. Returns `{ values: Map<stream, V>, stats }`, re-rendering each frame only while something is playing. `self` is your own stream key, since you draw your own input locally with no delay.
-- `useHistory(api: { history }, { room, stream?, speed? })` wraps `HistoryPlayer` with play, pause, seek and speed.
+- `useSender(appendMutationRef, { room, stream?, flushMs?, sampleMs? })` returns
+  `send(value)`. Flushes on unmount and `pagehide`.
+- `usePlayback(api: { latest, streams, history? }, { room, self?, fromStart?, delayMs?, maxDelayMs?, interpolate?, onSample?, onReset? })`.
+  Subscribes to `streams.list` once, then to `latest` for each active stream
+  with `useQueries`, feeds a `Player`, ticks it on `requestAnimationFrame`.
+  Returns `{ values: Map<stream, V>, stats }`, re-rendering each frame only
+  while something is playing. `self` is your own stream key, since you draw your
+  own input locally with no delay.
+- `useHistory(api: { history }, { room, stream?, speed? })` wraps
+  `HistoryPlayer` with play, pause, seek and speed.
 
 ## Example app (`example/`)
 
 Replace the template's comments demo with a cursors page that proves it works:
 open it in two tabs and move the mouse.
-- Your own cursor is local. Everyone else's plays back through `usePlayback`.
-- A small HUD: writes a second you're sending, batches a second you're receiving, the current delay, and a slider for `flushMs` (16 ms to 1,000 ms) so you can see smooth-but-behind against jumpy-and-expensive.
-- Anonymous ids are fine (a random id in localStorage). No auth needed for the demo, but go through `exposeApi` with an `auth` callback so the pattern's right.
 
-More demos (drawing with timelapse, a tiny game with ghosts) come later in the same example app.
+- Your own cursor is local. Everyone else's plays back through `usePlayback`.
+- A small HUD: writes a second you're sending, batches a second you're
+  receiving, the current delay, and a slider for `flushMs` (16 ms to 1,000 ms)
+  so you can see smooth-but-behind against jumpy-and-expensive.
+- Anonymous ids are fine (a random id in localStorage). No auth needed for the
+  demo, but go through `exposeApi` with an `auth` callback so the pattern's
+  right.
+
+More demos (drawing with timelapse, a tiny game with ghosts) come later in the
+same example app.
 
 ## Tests
 
-- Component (convex-test): `seq` increments; `start/end` clamping and the 1 s re-anchor; validation errors; `latest` ordering and `count`; `streams` touch throttling (no patch within 5 s); `history` order and paging without skipping equal `start`s; `expiresAt` cleanup and `clear` in chunks.
-- Sender (fake timers): windows, single-flight, failure retry, `sampleMs` thinning keeps trailing samples and never drops discrete events.
-- Player (injected clock): placement in server time, ordered `onSample`, dedupe by `seq`, late arrivals, hold on starvation, interpolation, offset estimate.
+- Component (convex-test): `seq` increments; `start/end` clamping and the 1 s
+  re-anchor; validation errors; `latest` ordering and `count`; `streams` touch
+  throttling (no patch within 5 s); `history` order and paging without skipping
+  equal `start`s; `expiresAt` cleanup and `clear` in chunks.
+- Sender (fake timers): windows, single-flight, failure retry, `sampleMs`
+  thinning keeps trailing samples and never drops discrete events.
+- Player (injected clock): placement in server time, ordered `onSample`, dedupe
+  by `seq`, late arrivals, hold on starvation, interpolation, offset estimate.
 
 ## Decided while building (2026-10-19)
 
-- `history` returns `{ batches, next }`; pass `next` back as `after`. The cursor is `{ start, creationTime, seq }`, so batches that share a `start` aren't skipped. No convex-helpers dependency.
-- `Sender.push(value, { keep: true })` marks discrete events that `sampleMs` thinning must never drop.
-- `Player` dedupes by batch `_id`, not `seq`, because `seq` restarts after `clear`. (Changed in the fix round below: by `seq`, with `_creationTime` to spot a restart.)
-- `exposeApi` doesn't expose `clear`. It's destructive, so it's only on the `BatchedReplay` class.
-- The React hooks key their subscriptions on `getFunctionName(...)`, because `api.x.y` is a new object every render and `useQueries` resubscribes (and loops) on a new input object.
-- The automatic delay replaced "flushMs + 150". Measured headless with a 60 Hz sender on the local backend: 250 ms flush plays 330 ms behind, steady, at 3.9 writes/s; 1 s flush plays 1,080 ms behind, steady; a 50 ms flush (18 writes/s) plays 540 to 765 ms behind, because batches start queueing.
+- `history` returns `{ batches, next }`; pass `next` back as `after`. The cursor
+  is `{ start, creationTime, seq }`, so batches that share a `start` aren't
+  skipped. No convex-helpers dependency.
+- `Sender.push(value, { keep: true })` marks discrete events that `sampleMs`
+  thinning must never drop.
+- `Player` dedupes by batch `_id`, not `seq`, because `seq` restarts after
+  `clear`. (Changed in the fix round below: by `seq`, with `_creationTime` to
+  spot a restart.)
+- `exposeApi` doesn't expose `clear`. It's destructive, so it's only on the
+  `BatchedReplay` class.
+- The React hooks key their subscriptions on `getFunctionName(...)`, because
+  `api.x.y` is a new object every render and `useQueries` resubscribes (and
+  loops) on a new input object.
+- The automatic delay replaced "flushMs + 150". Measured headless with a 60 Hz
+  sender on the local backend: 250 ms flush plays 330 ms behind, steady, at 3.9
+  writes/s; 1 s flush plays 1,080 ms behind, steady; a 50 ms flush (18 writes/s)
+  plays 540 to 765 ms behind, because batches start queueing.
 
 ### Fix round after the three-model review (2026-10-19)
 
@@ -311,6 +399,41 @@ changed, and why:
   changelog, `prepublishOnly`, `react` an optional peer, tests left out of the
   package, `npm ci` in CI. The `convex` peer stays `^1.43.0`.
 
+### Demo video tweaks (2026-10-20)
+
+- **A snapshot instead of the whole history.**
+  `usePlayback({ snapshot: { load, apply } })` loads the app's own copy of the
+  room, `apply` draws it and returns each stream's last covered `seq`, and
+  `Player.startAfter` sets each stream's position there, so live batches skip
+  what's covered and gap fill fetches anything between it and the first live
+  result. Covered batches are skipped whatever their `_creationTime` (a stream
+  only restarts at seq 0 after a clear, and the clear's epoch resets the player
+  and reloads the snapshot). A load that finishes after a reset is dropped
+  without calling `apply`, so a stale snapshot can't be drawn over a cleared
+  board.
+- **Drawing demo:** `onAppend` keeps one `pens` doc per stream (the last `seq`
+  it applied and the stroke in progress) and finished `strokes` stamped with a
+  board number. "Clear board" bumps the room's `boards` doc, so the snapshot
+  (strokes and pens on the current board) is empty at once, while the gallery
+  keeps every stroke. Every append reads the `boards` doc, the way the
+  component's own append reads its `rooms` doc; only a clear writes it. A window
+  that loads the snapshot in the moment between the app's clear and the
+  component's last clear chunk can briefly show batches that are about to be
+  deleted; the epoch bump then resets it.
+- `useSender` has `onSend`, so the HUDs show writes actually sent in the last
+  second; `usePlayback` has `maxStreams`, since 100 bots plus a couple of tabs
+  pass the stream list's default of 100.
+
 ## The room feed (parked, 2026-10-20)
 
-Ian suggested `db.vars.commitTs` and the Batch Worker component: a per-room worker merges the room's new batches into one feed, so viewers subscribe once per room instead of once per person. It's built on the `room-feed` branch (438c227) and load-tested against a cloud deployment (the video folder's research/component-limits-2026-10-20.md). Writes stayed fast to 100 people and subscriptions dropped 50x, but the worker loop sometimes paused for 6 to 8 s at 50 people with no errors, it dropped frames unless it sent the newest two, and it costs more for small rooms: the loop is a scheduled function, which is billed at about 10 calls a second per busy room, so it only beats per-stream subscriptions once about 4 people are moving. Parked: per-stream subscriptions stay the only mode, with the limits in the README.
+Ian suggested `db.vars.commitTs` and the Batch Worker component: a per-room
+worker merges the room's new batches into one feed, so viewers subscribe once
+per room instead of once per person. It's built on the `room-feed` branch
+(438c227) and load-tested against a cloud deployment (the video folder's
+research/component-limits-2026-10-20.md). Writes stayed fast to 100 people and
+subscriptions dropped 50x, but the worker loop sometimes paused for 6 to 8 s at
+50 people with no errors, it dropped frames unless it sent the newest two, and
+it costs more for small rooms: the loop is a scheduled function, which is billed
+at about 10 calls a second per busy room, so it only beats per-stream
+subscriptions once about 4 people are moving. Parked: per-stream subscriptions
+stay the only mode, with the limits in the README.

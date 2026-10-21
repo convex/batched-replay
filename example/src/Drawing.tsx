@@ -1,6 +1,6 @@
 import { useRef, useState } from "react";
-import type { PointerEvent } from "react";
-import { useMutation, useQuery } from "convex/react";
+import type { FunctionReturnType } from "convex/server";
+import { useConvex, useMutation, useQuery } from "convex/react";
 import {
   useHistory,
   usePlayback,
@@ -8,22 +8,27 @@ import {
 } from "@convex-dev/batched-replay/react";
 import { api } from "../convex/_generated/api";
 import { colorFor, useAnonymousId } from "./anonymous";
+import { useWritesPerSecond } from "./useWritesPerSecond";
+import DrawingScene from "./DrawingScene";
 
 const ROOM = "drawing-demo";
 const FLUSH_MS = 250;
 const SPEEDS = [1, 10, 50];
 
-// The board is a fixed 1600x900 world. CSS scales the canvas to fit the
-// window, so a resize never needs a redraw.
+// The board is a fixed 1600x900 world, drawn on a 2D canvas. The 3D scene
+// shows that canvas as the ink on a sheet of paper, so a resize never needs
+// a redraw.
 const WIDTH = 1600;
 const HEIGHT = 900;
-const PEN_WIDTH = 6;
+const PEN_WIDTH = 10;
 const dpr = window.devicePixelRatio || 1;
 
 type Point = { x: number; y: number };
 type Sample = { k: "down" | "move" | "up"; x: number; y: number };
 // Where each stream's pen last was. No entry means the pen is up.
 type Pens = Map<string, Point>;
+// The app's own copy of the board: see snapshot in convex/drawing.ts.
+type Snapshot = FunctionReturnType<typeof api.drawing.snapshot>;
 
 function drawSegment(
   canvas: HTMLCanvasElement | null,
@@ -35,6 +40,9 @@ function drawSegment(
   if (!ctx) return;
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.strokeStyle = color;
+  // A soft edge in the same colour, like marker ink bleeding into paper.
+  ctx.shadowColor = color;
+  ctx.shadowBlur = 2.5 * dpr;
   ctx.lineWidth = PEN_WIDTH;
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
@@ -69,6 +77,33 @@ function applySample(
   else pens.set(stream, point);
 }
 
+function drawStroke(
+  canvas: HTMLCanvasElement | null,
+  stream: string,
+  points: Point[],
+) {
+  points.forEach((point, i) =>
+    drawSegment(canvas, colorFor(stream), points[i - 1] ?? point, point),
+  );
+}
+
+// Draws the board from the app's snapshot. A pen that's mid-stroke is left
+// where it got to, so its next live samples carry on from there.
+function drawSnapshot(
+  canvas: HTMLCanvasElement | null,
+  pens: Pens,
+  snapshot: Snapshot,
+) {
+  for (const stroke of snapshot.strokes) {
+    drawStroke(canvas, stroke.stream, stroke.points);
+  }
+  for (const pen of snapshot.pens) {
+    drawStroke(canvas, pen.stream, pen.points);
+    const last = pen.points.at(-1);
+    if (last) pens.set(pen.stream, last);
+  }
+}
+
 // A thumbnail's view box: the stroke's own bounds plus a margin, so a small
 // stroke fills its thumbnail instead of being a dot on a full-size board.
 function fitBox(points: Point[]) {
@@ -84,6 +119,7 @@ function fitBox(points: Point[]) {
 
 export default function Drawing() {
   const me = useAnonymousId();
+  const convex = useConvex();
   const boardRef = useRef<HTMLCanvasElement>(null);
   const timelapseRef = useRef<HTMLCanvasElement>(null);
   // Pen state is kept apart for each source, so strokes never join across
@@ -98,18 +134,28 @@ export default function Drawing() {
   // Finished strokes, mirrored into the app's own table by onAppend.
   const strokes = useQuery(api.drawing.recentStrokes);
 
+  const { writesPerSecond, countWrite } = useWritesPerSecond();
   const send = useSender(api.drawing.append, {
     room: ROOM,
     stream: me,
     flushMs: FLUSH_MS,
+    onSend: countWrite,
   });
 
-  // The board: everything drawn so far, then everyone else's strokes a
-  // little behind live. When someone clears the room, start again.
+  // The board: drawn from the app's snapshot rather than by replaying every
+  // batch, then everyone else's strokes a little behind live, carrying on
+  // from the last batch the snapshot covers. When someone clears the room,
+  // start again.
   const { stats } = usePlayback(api.drawing, {
     room: ROOM,
     self: me,
-    fromStart: true,
+    snapshot: {
+      load: () => convex.query(api.drawing.snapshot, {}),
+      apply: (snapshot) => {
+        drawSnapshot(boardRef.current, pens.board, snapshot);
+        return snapshot.pens;
+      },
+    },
     onSample: (stream, sample) =>
       applySample(boardRef.current, pens.board, stream, sample),
     onReset: () => {
@@ -132,21 +178,12 @@ export default function Drawing() {
     timelapse.restart();
   };
 
-  const toBoard = (e: PointerEvent<HTMLCanvasElement>): Point => {
-    const rect = e.currentTarget.getBoundingClientRect();
-    return {
-      x: Math.round(((e.clientX - rect.left) * WIDTH) / rect.width),
-      y: Math.round(((e.clientY - rect.top) * HEIGHT) / rect.height),
-    };
-  };
   // Your own strokes are drawn locally, with no delay, and sent as well.
-  const pen = (k: Sample["k"], e: PointerEvent<HTMLCanvasElement>) => {
-    const sample = { k, ...toBoard(e) };
+  // The scene gives each pointer event as a point on the board.
+  const pen = (k: Sample["k"], point: Point) => {
+    const sample = { k, ...point };
     applySample(boardRef.current, pens.mine, me, sample);
     send(sample, k === "move" ? undefined : { keep: true });
-  };
-  const penUp = (e: PointerEvent<HTMLCanvasElement>) => {
-    if (pens.mine.has(me)) pen("up", e);
   };
 
   return (
@@ -154,9 +191,7 @@ export default function Drawing() {
       <div className="hud">
         <h1>Batched replay: drawing</h1>
         <div>Open this page in a second tab and draw.</div>
-        <div>
-          You send up to {(1000 / FLUSH_MS).toFixed(1)} writes/s while drawing
-        </div>
+        <div>You send {writesPerSecond} writes/s</div>
         <div>You receive {stats.batchesPerSecond.toFixed(1)} batches/s</div>
         <div>Playing {Math.round(stats.delayMs)} ms behind</div>
         <div>
@@ -193,7 +228,7 @@ export default function Drawing() {
                   points={stroke.points.map((p) => `${p.x},${p.y}`).join(" ")}
                   fill="none"
                   stroke={colorFor(stroke.stream)}
-                  strokeWidth={3}
+                  strokeWidth={4}
                   vectorEffect="non-scaling-stroke"
                   strokeLinecap="round"
                   strokeLinejoin="round"
@@ -210,22 +245,30 @@ export default function Drawing() {
           Clear strokes
         </button>
       </aside>
-      <div className="board-wrap">
+      <DrawingScene
+        me={me}
+        board={boardRef}
+        timelapse={timelapseRef}
+        showTimelapse={timelapse.playing}
+        pens={{
+          mine: pens.mine,
+          others: timelapse.playing ? pens.timelapse : pens.board,
+        }}
+        onPenDown={(point) => pen("down", point)}
+        onPenMove={(point) => {
+          if (pens.mine.has(me)) pen("move", point);
+        }}
+        onPenUp={(point) => {
+          if (pens.mine.has(me)) pen("up", point);
+        }}
+      />
+      {/* The boards the scene shows, off screen. */}
+      <div className="drawing3d-source">
         <canvas
           ref={boardRef}
           className="board"
           width={WIDTH * dpr}
           height={HEIGHT * dpr}
-          onPointerDown={(e) => {
-            if (e.button !== 0) return;
-            e.currentTarget.setPointerCapture(e.pointerId);
-            pen("down", e);
-          }}
-          onPointerMove={(e) => {
-            if (pens.mine.has(me)) pen("move", e);
-          }}
-          onPointerUp={penUp}
-          onPointerCancel={penUp}
         />
         <canvas
           ref={timelapseRef}

@@ -1,0 +1,90 @@
+/* The racer's 3D view fills the window, under a glassy HUD. */
+.racer-canvas {
+  position: fixed !important;
+  inset: 0;
+  background: #0b1022;
+}
+
+.hud.racer-hud {
+  top: 16px;
+  left: 16px;
+  min-width: 230px;
+  padding: 14px 18px 16px;
+  font-family:
+    system-ui,
+    -apple-system,
+    sans-serif;
+  font-size: 13px;
+  line-height: 1.65;
+  color: #e7e9f2;
+  background: linear-gradient(
+    160deg,
+    rgb(30 36 60 / 0.62),
+    rgb(12 15 28 / 0.5)
+  );
+  border: 1px solid rgb(255 255 255 / 0.1);
+  border-radius: 16px;
+  box-shadow:
+    0 12px 40px rgb(0 0 0 / 0.35),
+    inset 0 1px 0 rgb(255 255 255 / 0.08);
+  backdrop-filter: blur(16px) saturate(140%);
+  -webkit-backdrop-filter: blur(16px) saturate(140%);
+}
+
+.racer-hud h1 {
+  margin: 0 0 6px;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: #fff;
+}
+
+.racer-hud h1::before {
+  content: "";
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 8px;
+  border-radius: 50%;
+  background: #f3b01c;
+  box-shadow: 0 0 10px #f3b01c;
+  vertical-align: 1px;
+}
+
+.hud.racer-hud .lap-time {
+  margin: 4px 0 2px;
+  font-size: 28px;
+  font-weight: 700;
+  line-height: 1.2;
+  letter-spacing: -0.01em;
+  color: #fff;
+}
+
+.racer-cameras {
+  display: flex;
+  gap: 2px;
+  margin-top: 10px;
+  padding: 3px;
+  background: rgb(0 0 0 / 0.3);
+  border: 1px solid rgb(255 255 255 / 0.08);
+  border-radius: 10px;
+}
+
+.hud .racer-cameras button {
+  flex: 1;
+  margin: 0;
+  padding: 4px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #aab0c4;
+  background: transparent;
+  border: 0;
+  border-radius: 7px;
+  cursor: pointer;
+}
+
+.hud .racer-cameras button[aria-pressed="true"] {
+  color: #1a1206;
+  background: #f3b01c;
+  box-shadow: 0 2px 10px rgb(243 176 28 / 0.35);
+}

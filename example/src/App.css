@@ -149,3 +149,88 @@
   opacity: 0.4;
   cursor: default;
 }
+/* Racer and marble: a fixed-size world, scaled to fit the window. */
+.game-wrap {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+}
+.racer-track {
+  width: min(100vw, calc(100vh * 16 / 9));
+  aspect-ratio: 16 / 9;
+  background: #24402a; /* grass */
+}
+.hud .lap-time {
+  font-size: 22px;
+  font-weight: 600;
+}
+.marble-wrap {
+  padding-left: 360px; /* clear of the HUD */
+}
+.marble-maze {
+  width: min(calc(100vw - 400px), calc((100vh - 40px) * 3 / 2));
+  aspect-ratio: 3 / 2;
+  background: #d9c29a;
+  border-radius: 8px;
+}
+/* The phone's tilt controller: big and easy to hit with a thumb. */
+.tilt {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 64px 16px 16px;
+  font-size: 18px;
+  text-align: center;
+}
+.tilt h1 {
+  margin: 0;
+  font-size: 24px;
+}
+.tilt p {
+  margin: 0;
+}
+.tilt button {
+  padding: 16px 28px;
+  font: inherit;
+  font-weight: 600;
+  color: inherit;
+  background: #fff2;
+  border: 1px solid #fff4;
+  border-radius: 12px;
+  cursor: pointer;
+}
+.tilt button[aria-pressed="true"] {
+  background: #3c6;
+  color: #111;
+}
+.tilt-flush {
+  display: flex;
+  gap: 12px;
+}
+.tilt-flush button {
+  min-width: 130px;
+  font-size: 24px;
+}
+.tilt-pad {
+  position: relative;
+  width: min(80vw, 300px);
+  aspect-ratio: 1;
+  background: #1c1c22;
+  border: 2px solid #fff4;
+  border-radius: 50%;
+  touch-action: none;
+}
+.tilt-dot {
+  position: absolute;
+  width: 36px;
+  height: 36px;
+  margin: -18px 0 0 -18px;
+  background: #eee;
+  border-radius: 50%;
+  pointer-events: none;
+}
+.tilt-reading {
+  font-variant-numeric: tabular-nums;
+}

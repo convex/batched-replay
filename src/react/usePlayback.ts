@@ -26,7 +26,10 @@ type PlaybackApi<V> = {
       streams: { stream: string; firstStart: number; lastEnd: number }[];
     }
   >;
-  /** Needed for `fromStart`, and to fill gaps when batches are missed. */
+  /**
+   * Needed for `fromStart` and `snapshot`, and to fill gaps when batches are
+   * missed.
+   */
   history?: FunctionReference<
     "query",
     "public",
@@ -35,7 +38,21 @@ type PlaybackApi<V> = {
   >;
 };
 
-export type PlaybackOptions<V> = {
+/**
+ * Your own snapshot of what's been played so far, to start from instead of
+ * the whole history.
+ */
+export type PlaybackSnapshot<S> = {
+  /** Loads it: on start, and again after every reset. */
+  load: () => Promise<S>;
+  /**
+   * Draws it, and returns the last batch (`seq`) it covers for each stream.
+   * Not called if the room was reset while it loaded.
+   */
+  apply: (snapshot: S) => { stream: string; seq: number }[];
+};
+
+export type PlaybackOptions<V, S = unknown> = {
   room: string;
   /** Your own stream key: you draw your own input locally, with no delay. */
   self?: string;
@@ -44,13 +61,23 @@ export type PlaybackOptions<V> = {
    * order, then carry on live with no gap and nothing twice.
    */
   fromStart?: boolean;
+  /**
+   * Start from your own snapshot instead (say, a table `onAppend` keeps).
+   * Each stream carries on from the batch after the one the snapshot covers,
+   * with nothing twice and no gap; a stream it doesn't list plays from its
+   * first batch.
+   */
+  snapshot?: PlaybackSnapshot<S>;
+  /** How many of the room's most recently active streams to watch (100). */
+  maxStreams?: number;
   delayMs?: number;
   maxDelayMs?: number;
   interpolate?: Interpolate<V>;
   onSample?: (stream: string, value: V, time: number) => void;
   /**
    * Called when the room is cleared. Everything buffered is dropped, and with
-   * fromStart the (now empty) history is replayed again.
+   * fromStart the (now empty) history is replayed again, or with snapshot
+   * the snapshot is loaded again.
    */
   onReset?: () => void;
 };
@@ -84,26 +111,31 @@ export function activeStreams(
  * Subscribes to a room's active streams and plays them back slightly behind
  * live. Re-renders every frame while something is playing.
  */
-export function usePlayback<V>(
+export function usePlayback<V, S = unknown>(
   api: PlaybackApi<V>,
-  options: PlaybackOptions<V>,
+  options: PlaybackOptions<V, S>,
 ): { values: Map<string, V>; stats: PlayerStats } {
-  const { room, self, delayMs, maxDelayMs, interpolate } = options;
+  const { room, self, maxStreams, delayMs, maxDelayMs, interpolate } = options;
   const fromStart = options.fromStart ?? false;
+  const fromSnapshot = options.snapshot !== undefined;
   const convex = useConvex();
   const onSampleRef = useRef(options.onSample);
   const onResetRef = useRef(options.onReset);
+  const snapshotRef = useRef(options.snapshot);
   useEffect(() => {
     onSampleRef.current = options.onSample;
     onResetRef.current = options.onReset;
+    snapshotRef.current = options.snapshot;
   });
   // `api.x.y` is a new object on every render, so hooks below key on the
   // function's name and read the latest reference from here.
   const apiRef = useRef(api);
   apiRef.current = api;
   const historyName = api.history && getFunctionName(api.history);
-  if (fromStart && !historyName) {
-    throw new Error("usePlayback: fromStart needs `history` in the api");
+  if ((fromStart || fromSnapshot) && !historyName) {
+    throw new Error(
+      "usePlayback: fromStart and snapshot need `history` in the api",
+    );
   }
   useEffect(() => {
     if (!historyName) {
@@ -116,7 +148,8 @@ export function usePlayback<V>(
   const player = useMemo(
     () =>
       new Player<V>({
-        fromStart,
+        // Every batch after the history or snapshot matters.
+        fromStart: fromStart || fromSnapshot,
         onSample: (stream, value, time) =>
           onSampleRef.current?.(stream, value, time),
         // Fills gaps from the stream's history when batches were missed.
@@ -134,11 +167,14 @@ export function usePlayback<V>(
           : undefined,
       }),
     // A new room gets a fresh player, so `room` is a dependency on purpose.
-    [convex, room, fromStart, historyName],
+    [convex, room, fromStart, fromSnapshot, historyName],
   );
   player.configure({ delayMs, maxDelayMs, interpolate });
 
-  const list = useQuery(api.streams, { room });
+  const list = useQuery(
+    api.streams,
+    maxStreams === undefined ? { room } : { room, limit: maxStreams },
+  );
   const epoch = list?.epoch;
 
   // A new epoch means the room was cleared: drop everything and start again.
@@ -153,37 +189,46 @@ export function usePlayback<V>(
     lastEpoch.current = { player, epoch };
   }, [player, epoch]);
 
-  // With fromStart, replay the stored history before going live.
-  const [historyDone, setHistoryDone] = useState<{
+  // With fromStart, replay the stored history before going live; with
+  // snapshot, apply the snapshot.
+  const [startDone, setStartDone] = useState<{
     player: Player<V>;
     epoch: number;
   }>();
   useEffect(() => {
-    if (!fromStart || epoch === undefined) return;
+    if (!(fromStart || fromSnapshot) || epoch === undefined) return;
     let stopped = false;
     let retry: ReturnType<typeof setTimeout> | undefined;
-    const load = () =>
-      player
-        .loadHistory((after: Cursor | undefined) =>
+    const start = async () => {
+      if (!fromSnapshot) {
+        return player.loadHistory((after: Cursor | undefined) =>
           convex.query(apiRef.current.history!, { room, after, limit: 200 }),
-        )
-        .then(
-          (done) => {
-            if (done && !stopped) setHistoryDone({ player, epoch });
-          },
-          () => {
-            if (!stopped) retry = setTimeout(load, RETRY_HISTORY_MS);
-          },
         );
-    void load();
+      }
+      const { load, apply } = snapshotRef.current!;
+      const snapshot = await load();
+      if (stopped) return false;
+      player.startAfter(apply(snapshot));
+      return true;
+    };
+    const run = () =>
+      start().then(
+        (done) => {
+          if (done && !stopped) setStartDone({ player, epoch });
+        },
+        () => {
+          if (!stopped) retry = setTimeout(run, RETRY_HISTORY_MS);
+        },
+      );
+    void run();
     return () => {
       stopped = true;
       clearTimeout(retry);
     };
-  }, [fromStart, player, epoch, convex, room]);
+  }, [fromStart, fromSnapshot, player, epoch, convex, room]);
   const live =
-    !fromStart ||
-    (historyDone?.player === player && historyDone.epoch === epoch);
+    !(fromStart || fromSnapshot) ||
+    (startDone?.player === player && startDone.epoch === epoch);
 
   const [, render] = useReducer((n: number) => n + 1, 0);
   // The stream list only changes every few seconds, so re-check which

@@ -522,6 +522,37 @@ describe("Player", () => {
       expect(t.xs()).toEqual([1, 10, 2, 3, 20, 21, 22, 4]);
     });
 
+    test("after a snapshot, live carries on from the next batch", async () => {
+      const fetchAfter = vi.fn(async (stream: string, seq: number) =>
+        stored.filter((b) => b.stream === stream && b.seq > seq),
+      );
+      const t = setup({ fromStart: true, fetchAfter });
+      const stored = [0, 1, 2, 3].map((seq) =>
+        historyBatch(
+          "a",
+          batch(t.server() - 1_000 + 100 * seq, one(seq), { seq }),
+        ),
+      );
+      // The app's snapshot already shows a up to batch 1, and nothing of b.
+      t.player.startAfter([{ stream: "a", seq: 1 }]);
+      // a's subscription starts at 3, so 2 is fetched; 1 is never played.
+      t.player.ingest("a", [stored[1], stored[3]]);
+      await Promise.resolve();
+      expect(fetchAfter).toHaveBeenCalledWith("a", 1);
+      // b isn't in the snapshot, so its old first batch still plays.
+      t.player.ingest("b", [
+        batch(t.server() - 5_000, one(10), { seq: 0, stream: "b" }),
+      ]);
+      t.player.tick();
+      expect(t.xs()).toEqual([2, 3, 10]);
+      // The covered batch delivered again (a newer subscription result) is
+      // still skipped, and live carries on.
+      t.player.ingest("a", [stored[3], batch(t.server(), one(4), { seq: 4 })]);
+      t.advance(1_000);
+      t.player.tick();
+      expect(t.xs()).toEqual([2, 3, 10, 4]);
+    });
+
     test("a history load cut short by reset reports it", async () => {
       const t = setup({ fromStart: true });
       let release: () => void = () => {};

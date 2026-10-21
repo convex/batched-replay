@@ -1,0 +1,234 @@
+/* The 3D cursors and drawing demos: a full-window scene with a glassy HUD
+   over it. Everything is scoped to pages with a .scene3d, so the other demos keep
+   their own look. */
+.scene3d {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  background: #090b14;
+}
+.scene3d-canvas {
+  position: absolute !important;
+  inset: 0;
+  touch-action: none;
+}
+.cursors3d .scene3d-canvas {
+  cursor: none; /* your own arrow is the cursor */
+}
+
+/* The glassy HUD. */
+body:has(.scene3d) .hud,
+body:has(.scene3d) .strokes {
+  color: #eef0f8;
+  background: linear-gradient(
+    160deg,
+    rgba(32, 36, 58, 0.62),
+    rgba(12, 14, 26, 0.72)
+  );
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow:
+    0 18px 50px rgba(0, 0, 0, 0.45),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  backdrop-filter: blur(16px) saturate(1.4);
+  -webkit-backdrop-filter: blur(16px) saturate(1.4);
+  font-family:
+    system-ui,
+    -apple-system,
+    sans-serif;
+}
+body:has(.scene3d) .hud {
+  top: 16px;
+  left: 16px;
+  padding: 16px 18px 14px;
+  border-radius: 16px;
+  font-size: 14px;
+  line-height: 1.65;
+  min-width: 300px;
+}
+body:has(.scene3d) .hud h1 {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 6px;
+  font-size: 16px;
+  font-weight: 650;
+  letter-spacing: 0.01em;
+}
+body:has(.scene3d) .hud h1::before {
+  content: "";
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  background: linear-gradient(135deg, #f3b01c, #ee342f 55%, #8d2676);
+  box-shadow: 0 0 12px rgba(243, 176, 28, 0.6);
+}
+body:has(.scene3d) .hud > div:not(:has(button)) {
+  color: #c4c8da;
+}
+body:has(.scene3d) .hud button,
+body:has(.scene3d) .strokes button {
+  margin: 6px 6px 0 0;
+  padding: 5px 12px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 550;
+  color: #e6e8f2;
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 999px;
+  cursor: pointer;
+  transition:
+    background 0.15s,
+    border-color 0.15s,
+    color 0.15s;
+}
+body:has(.scene3d) .hud button:hover:not(:disabled),
+body:has(.scene3d) .strokes button:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.14);
+}
+body:has(.scene3d) .hud button[aria-pressed="true"] {
+  color: #1a1206;
+  background: linear-gradient(180deg, #f8c443, #f3b01c);
+  border-color: #f3b01c;
+  box-shadow: 0 0 16px rgba(243, 176, 28, 0.35);
+}
+body:has(.scene3d) .hud label {
+  margin-top: 8px;
+  color: #c4c8da;
+}
+body:has(.scene3d) .hud input[type="range"] {
+  width: 240px;
+  accent-color: #f3b01c;
+}
+body:has(.scene3d) .hud input[type="checkbox"] {
+  accent-color: #f3b01c;
+  width: 15px;
+  height: 15px;
+}
+
+/* Name tags, pinned beside each arrow. */
+.cursors3d .tags {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+.cursors3d .tag {
+  position: absolute;
+  left: 0;
+  top: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 14px 5px 10px;
+  font:
+    700 16px/1.25 system-ui,
+    -apple-system,
+    sans-serif;
+  letter-spacing: 0.01em;
+  color: #fff;
+  white-space: nowrap;
+  background: rgba(14, 16, 28, 0.82);
+  border: 1.5px solid rgba(255, 255, 255, 0.22);
+  border-radius: 999px;
+  box-shadow:
+    0 8px 22px rgba(0, 0, 0, 0.5),
+    inset 0 1px 0 rgba(255, 255, 255, 0.1);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  will-change: transform;
+}
+.cursors3d .tag i {
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  box-shadow:
+    0 0 0 2px rgba(255, 255, 255, 0.85),
+    0 0 10px rgba(255, 255, 255, 0.4);
+}
+
+/* Drawing: the 2D boards the 3D paper shows are kept, but not on screen. */
+.drawing3d-source {
+  position: fixed;
+  left: 0;
+  top: 0;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* The strokes gallery. */
+body:has(.scene3d) .strokes {
+  top: 64px;
+  right: 16px;
+  width: 236px;
+  max-height: calc(100vh - 84px);
+  padding: 16px;
+  border-radius: 16px;
+  font-size: 12px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
+}
+body:has(.scene3d) .strokes h2 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 650;
+}
+body:has(.scene3d) .strokes p {
+  margin: 4px 0 12px;
+  color: #a9aec4;
+  line-height: 1.45;
+}
+body:has(.scene3d) .stroke-grid {
+  gap: 10px;
+}
+body:has(.scene3d) .strokes figure {
+  margin: 0;
+  padding: 5px 5px 4px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  transition:
+    transform 0.15s,
+    background 0.15s;
+}
+body:has(.scene3d) .strokes figure:hover {
+  transform: translateY(-2px);
+  background: rgba(255, 255, 255, 0.1);
+}
+body:has(.scene3d) .strokes svg {
+  background: radial-gradient(circle at 30% 20%, #fffdf8, #f1ebe0 75%), #f4efe6;
+  border-radius: 6px;
+  box-shadow:
+    0 3px 8px rgba(0, 0, 0, 0.35),
+    inset 0 0 0 1px rgba(0, 0, 0, 0.06);
+}
+body:has(.scene3d) .strokes polyline {
+  filter: saturate(1.15) brightness(0.88);
+}
+body:has(.scene3d) .strokes figcaption {
+  margin-top: 4px;
+  color: #a9aec4;
+  font-variant-numeric: tabular-nums;
+}
+body:has(.scene3d) .strokes button {
+  margin-top: 12px;
+  width: 100%;
+}
+body:has(.scene3d) .strokes button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+@media (max-width: 900px) {
+  body:has(.scene3d) .hud {
+    min-width: 0;
+  }
+  body:has(.scene3d) .strokes {
+    width: 170px;
+  }
+  body:has(.scene3d) .stroke-grid {
+    grid-template-columns: 1fr;
+  }
+}

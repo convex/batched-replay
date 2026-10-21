@@ -6,14 +6,19 @@ import {
   mutation,
   query,
   type MutationCtx,
+  type QueryCtx,
 } from "./_generated/server.js";
 
 const ROOM = "drawing-demo";
 // A long stroke is thinned out rather than allowed to grow without limit, so
 // it stays well under Convex's 8,192 array items and 1 MiB per document.
 const MAX_POINTS = 2_000;
+// Plenty for a demo board. A bigger one would load its strokes a page at a
+// time.
+const MAX_BOARD_STROKES = 1_000;
 
 type Point = { x: number; y: number };
+const point = v.object({ x: v.number(), y: v.number() });
 
 // Drawings are kept forever (no retentionMs), so any session can be replayed.
 export const { append, latest, history, streams } = exposeApi(
@@ -32,22 +37,22 @@ export const { append, latest, history, streams } = exposeApi(
       return stream;
     },
     // Runs inside every append, after the batch is stored. A stroke spans
-    // many batches, so each stream's points are collected in its own
-    // openStrokes document until the pen goes up.
+    // many batches, so each stream's points are collected in its own pens
+    // document until the pen goes up. The pen also remembers this batch's
+    // seq, so a new window knows where the snapshot ends and live begins.
     onAppend: async (
       ctx: MutationCtx,
       { room, stream, seq, start, samples, dropped },
     ) => {
-      const open = await ctx.db
-        .query("openStrokes")
+      const board = await currentBoard(ctx, room);
+      const pen = await ctx.db
+        .query("pens")
         .withIndex("by_stream", (q) => q.eq("room", room).eq("stream", stream))
         .unique();
-      // If a clear dropped the start of this batch, the open stroke was cut:
-      // start afresh rather than joining across the gap.
+      // A stroke from before the board was cleared isn't carried on: start
+      // afresh rather than joining across the clear.
       let stroke =
-        open && dropped === 0
-          ? { startSeq: open.startSeq, points: open.points }
-          : null;
+        pen && pen.board === board && dropped === 0 ? pen.stroke : null;
 
       for (const { t, v: sample } of samples) {
         const point = { x: sample.x, y: sample.y };
@@ -62,6 +67,7 @@ export const { append, latest, history, streams } = exposeApi(
           await ctx.db.insert("strokes", {
             room,
             stream,
+            board,
             points: stroke.points,
             startSeq: stroke.startSeq,
             endSeq: seq,
@@ -71,17 +77,25 @@ export const { append, latest, history, streams } = exposeApi(
         }
       }
 
-      // Keep where this stream's stroke got to, for its next batch.
-      if (!stroke) {
-        if (open) await ctx.db.delete("openStrokes", open._id);
-      } else if (open) {
-        await ctx.db.patch("openStrokes", open._id, stroke);
+      // Keep where this stream's pen got to, for its next batch.
+      if (pen) {
+        await ctx.db.patch("pens", pen._id, { board, seq, stroke });
       } else {
-        await ctx.db.insert("openStrokes", { room, stream, ...stroke });
+        await ctx.db.insert("pens", { room, stream, board, seq, stroke });
       }
     },
   },
 );
+
+// Which board the room is on: 0 until it's first cleared. Every append reads
+// this, and only "Clear board" writes it.
+async function currentBoard(ctx: QueryCtx, room: string) {
+  const doc = await ctx.db
+    .query("boards")
+    .withIndex("by_room", (q) => q.eq("room", room))
+    .unique();
+  return doc?.board ?? 0;
+}
 
 // Adds a point, halving the stroke's detail whenever it reaches MAX_POINTS.
 function addPoint(points: Point[], point: Point) {
@@ -89,6 +103,43 @@ function addPoint(points: Point[], point: Point) {
     points.length < MAX_POINTS ? points : points.filter((_, i) => i % 2 === 0);
   return [...kept, point];
 }
+
+// What the board looks like now, so a new window can draw it instead of
+// replaying every batch: the strokes finished since the last clear, the
+// strokes still being drawn, and the last batch (seq) each pen has applied.
+// Live playback carries on from the batch after that seq.
+export const snapshot = query({
+  args: {},
+  returns: v.object({
+    strokes: v.array(v.object({ stream: v.string(), points: v.array(point) })),
+    pens: v.array(
+      v.object({
+        stream: v.string(),
+        seq: v.number(),
+        points: v.array(point),
+      }),
+    ),
+  }),
+  handler: async (ctx) => {
+    const board = await currentBoard(ctx, ROOM);
+    const strokes = await ctx.db
+      .query("strokes")
+      .withIndex("by_board", (q) => q.eq("room", ROOM).eq("board", board))
+      .take(MAX_BOARD_STROKES);
+    const pens = await ctx.db
+      .query("pens")
+      .withIndex("by_board", (q) => q.eq("room", ROOM).eq("board", board))
+      .take(MAX_BOARD_STROKES);
+    return {
+      strokes: strokes.map(({ stream, points }) => ({ stream, points })),
+      pens: pens.map(({ stream, seq, stroke }) => ({
+        stream,
+        seq,
+        points: stroke?.points ?? [],
+      })),
+    };
+  },
+});
 
 // The newest finished strokes, for the gallery. Each is thinned to at most
 // about 100 points, which is plenty for a thumbnail.
@@ -99,13 +150,14 @@ export const recentStrokes = query({
       _id: v.id("strokes"),
       stream: v.string(),
       pointCount: v.number(),
-      points: v.array(v.object({ x: v.number(), y: v.number() })),
+      points: v.array(point),
     }),
   ),
   handler: async (ctx) => {
+    // Boards only go up, so newest board first is newest first.
     const strokes = await ctx.db
       .query("strokes")
-      .withIndex("by_room", (q) => q.eq("room", ROOM))
+      .withIndex("by_board", (q) => q.eq("room", ROOM))
       .order("desc")
       .take(24);
     return strokes.map((stroke) => {
@@ -120,25 +172,39 @@ export const recentStrokes = query({
   },
 });
 
-// Deleting is destructive, so it isn't part of exposeApi: use the class.
-// Every viewer's onReset fires once it's done. The strokes gallery is the
-// app's own data, so it stays.
+// "Clear board". Deleting batches is destructive, so it isn't part of
+// exposeApi: use the class. Every viewer's onReset fires once it's done.
+// Moving to a new board leaves the old strokes out of the snapshot, but they
+// stay in the strokes gallery.
 export const clear = mutation({
   args: {},
   returns: v.null(),
   handler: async (ctx) => {
-    await new BatchedReplay(components.batchedReplay).clear(ctx, {
-      room: ROOM,
-    });
+    await clearBoard(ctx);
     return null;
   },
 });
 
-// Deletes the gallery, 100 strokes per mutation.
+async function clearBoard(ctx: MutationCtx) {
+  const doc = await ctx.db
+    .query("boards")
+    .withIndex("by_room", (q) => q.eq("room", ROOM))
+    .unique();
+  if (doc) {
+    await ctx.db.patch("boards", doc._id, { board: doc.board + 1 });
+  } else {
+    await ctx.db.insert("boards", { room: ROOM, board: 1 });
+  }
+  await new BatchedReplay(components.batchedReplay).clear(ctx, { room: ROOM });
+}
+
+// Deletes the gallery, 100 strokes per mutation. The board is drawn from
+// the same strokes, so it's cleared too.
 export const clearStrokes = mutation({
   args: {},
   returns: v.null(),
   handler: async (ctx) => {
+    await clearBoard(ctx);
     await deleteSomeStrokes(ctx);
     return null;
   },
@@ -156,7 +222,7 @@ export const clearMoreStrokes = internalMutation({
 async function deleteSomeStrokes(ctx: MutationCtx) {
   const strokes = await ctx.db
     .query("strokes")
-    .withIndex("by_room", (q) => q.eq("room", ROOM))
+    .withIndex("by_board", (q) => q.eq("room", ROOM))
     .take(100);
   for (const stroke of strokes) await ctx.db.delete("strokes", stroke._id);
   if (strokes.length === 100) {

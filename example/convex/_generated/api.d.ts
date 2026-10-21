@@ -10,6 +10,8 @@
 
 import type * as cursors from "../cursors.js";
 import type * as drawing from "../drawing.js";
+import type * as racer from "../racer.js";
+import type * as tilt from "../tilt.js";
 
 import type {
   ApiFromModules,
@@ -20,6 +22,8 @@ import type {
 declare const fullApi: ApiFromModules<{
   cursors: typeof cursors;
   drawing: typeof drawing;
+  racer: typeof racer;
+  tilt: typeof tilt;
 }>;
 
 /**

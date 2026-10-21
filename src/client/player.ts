@@ -34,7 +34,8 @@ export type PlayerOptions<V> = {
   fetchAfter?: (stream: string, seq: number) => Promise<PlayerBatch<V>[]>;
   /**
    * Every batch matters, as for a drawing: feed the stored batches with
-   * `ingestHistory` first, and nothing after them is skipped for being old.
+   * `ingestHistory` (or say what a snapshot covers with `startAfter`) first,
+   * and nothing after them is skipped for being old.
    */
   fromStart?: boolean;
   now?: () => number;
@@ -185,6 +186,23 @@ export class Player<V> {
       this.ingestHistory(page.batches);
       if (page.next === null) return true;
       after = page.next;
+    }
+  }
+
+  /**
+   * "Snapshot, then live": your own snapshot (say, a table `onAppend` keeps)
+   * already shows each listed stream up to batch `seq`. Nothing up to there
+   * plays; live batches carry on from the next one, with gaps fetched as
+   * usual. Streams that aren't listed play from their first batch. Needs
+   * `fromStart`, so nothing after the snapshot is skipped for being old.
+   */
+  startAfter(streams: { stream: string; seq: number }[]) {
+    for (const { stream, seq } of streams) {
+      const state = this.stateFor(stream);
+      state.seq = seq;
+      // Any batch up to seq is covered. A stream only starts again at seq 0
+      // after a clear, and that resets the player.
+      state.created = Infinity;
     }
   }
 

@@ -174,6 +174,7 @@ const send = useSender(api.cursors.append, {
   stream: tabId,
   flushMs: 250, // one write per 250 ms while there's anything to send
   onError: (error) => console.warn(error), // it retries, with backoff
+  onSend: (batch) => countWrite(), // as each batch goes out, e.g. for a HUD
 });
 onPointerMove((e) => send({ x: e.clientX, y: e.clientY }));
 // Discrete events are never thinned out by sampleMs:
@@ -198,6 +199,9 @@ const { values, stats } = usePlayback(api.cursors, {
 // stats: { delayMs, bufferedMs, batchesPerSecond, samplesPerSecond }
 ```
 
+It watches the room's 100 most recently active streams; pass `maxStreams` (up to
+1,000) for a bigger crowd.
+
 It plays a little behind the server, by default just far enough to cover how
 late batches have been arriving (about 330 ms with a 250 ms flush), and never
 more than `maxDelayMs` (2 s). `onSample(stream, value, time)` fires for every
@@ -219,6 +223,38 @@ usePlayback(api.drawing, {
   onReset: () => clearCanvas(),
 });
 ```
+
+Replaying every batch gets slow once a room has a long history. If `onAppend`
+keeps your own copy of what it adds up to (the drawing demo keeps finished
+strokes, and each stream's stroke in progress), start from that instead. Have
+`onAppend` also store each stream's last `seq`, and return the copy from a query
+of your own, read in one transaction so the strokes and seqs agree:
+
+```tsx
+const convex = useConvex();
+usePlayback(api.drawing, {
+  room,
+  self: tabId,
+  snapshot: {
+    // On start, and again after every clear.
+    load: () => convex.query(api.drawing.snapshot, {}),
+    // Draw it, and say which batch it covers up to, for each stream.
+    apply: (snapshot) => {
+      drawSnapshot(snapshot);
+      return snapshot.pens; // [{ stream, seq }, ...]
+    },
+  },
+  onSample: (stream, sample) => draw(stream, sample),
+  onReset: () => clearCanvas(),
+});
+```
+
+Each listed stream then plays from the batch after its `seq`, however old,
+fetching any it missed from `history`, so nothing is drawn twice and nothing
+written while the snapshot loaded is lost. A stream the snapshot doesn't list
+plays from its first batch. `apply` isn't called if the room was cleared while
+the snapshot loaded; it's loaded again instead. See `example/convex/drawing.ts`
+and `example/src/Drawing.tsx`.
 
 ## Replay
 
@@ -307,14 +343,29 @@ dependencies.
 
 ## Example
 
-`example/` has two demos, switched by `#cursors` and `#drawing`. Cursors: open
-it in two tabs and move the mouse; a slider sets `flushMs` so you can compare
-smooth-but-behind with jumpy-and-expensive. Drawing: a shared board where
-everyone else's strokes replay at the speed they were drawn, with a timelapse.
+`example/` has demos switched by the URL hash. Cursors (`#cursors`): open it in
+two tabs and move the mouse; a slider sets `flushMs` so you can compare
+smooth-but-behind with jumpy-and-expensive, and the HUD switches between three
+ways of showing the same batches: Jump (to the newest point), Smooth (a straight
+glide to the newest point over one flush interval) and Replay batches. Drawing
+(`#drawing`): a shared board where everyone else's strokes replay at the speed
+they were drawn, with a timelapse. A new window draws the board from the app's
+own `strokes` and `pens` tables, then carries on live. Racer (`#racer`): a tiny
+racing game where each lap is its own stream, so your best lap comes back as a
+ghost through `useHistory`. Marble (`#marble`, with `#tilt` on a phone): the
+phone's tilt is sent like a cursor and rolls a marble on the laptop. See
+`example/README.md`.
 
 ```sh
 npm run dev
 npm run dev:frontend
+# 100 bot cursors on the cursors demo, for 60 s or until Ctrl-C
+npm run crowd -- --bots 100 --flush 250 --seconds 60
 ```
+
+`npm run crowd` connects each bot as its own client with its own stream key,
+sending through `Sender` like a browser tab. `--seconds 0` runs until Ctrl-C,
+and `--url` defaults to `VITE_CONVEX_URL` in `.env.local`. It needs the build in
+`dist/`, which `npm run dev` keeps up to date.
 
 See `DESIGN.md` for how it works.
