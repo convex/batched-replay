@@ -49,18 +49,53 @@
   background: #f3b01c;
   box-shadow: 0 0 10px #f3b01c;
 }
+/* "Control this from your phone", with a QR code of the #tilt page. */
 .marble-phone {
-  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 12px 10px;
   border-radius: 10px;
   background: #ffffff0d;
   border: 1px solid #ffffff14;
+  text-align: center;
 }
 .marble-phone strong {
-  display: block;
-  margin-top: 2px;
-  color: #f3b01c;
+  color: #fff;
+  font-size: 15px;
   font-weight: 600;
+}
+.marble-qr {
+  display: block;
+  width: 200px;
+  height: 200px;
+  border-radius: 8px;
+}
+.marble-phone-url {
+  font-size: 11px;
+  line-height: 1.35;
+  color: #f3b01c;
   word-break: break-all;
+}
+.marble-phone button,
+.marble-connected button {
+  margin: 0;
+  padding: 2px 10px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.marble-connected {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 8px 6px 12px;
+  border-radius: 10px;
+  background: #22c55e1a;
+  border: 1px solid #22c55e40;
+  color: #86efac;
+  font-weight: 600;
 }
 .marble-note {
   font-size: 12px;
@@ -107,7 +142,7 @@
   flex-direction: column;
   align-items: center;
   gap: 14px;
-  padding: max(64px, env(safe-area-inset-top)) 18px
+  padding: max(24px, env(safe-area-inset-top)) 18px
     max(20px, env(safe-area-inset-bottom));
   box-sizing: border-box;
   font:
@@ -276,4 +311,25 @@
 .phone-tilt-rate span {
   font-size: 14px;
   color: #8b93a7;
+}
+.phone-tilt-level {
+  padding: 10px 22px;
+  font: inherit;
+  font-size: 16px;
+  font-weight: 600;
+  color: #fff;
+  background: #ffffff14;
+  border: 1px solid #ffffff2e;
+  border-radius: 999px;
+  cursor: pointer;
+}
+.phone-tilt-level:active {
+  transform: scale(0.97);
+}
+.phone-tilt-laptop {
+  max-width: 420px;
+  font-size: 15px;
+}
+.phone-tilt-laptop a {
+  color: #f3b01c;
 }

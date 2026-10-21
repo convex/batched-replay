@@ -1,6 +1,8 @@
-// The phone half of the marble demo: open #marble on a laptop and #tilt on a
-// phone. The phone sends its tilt, exactly the way the cursors demo sends the
-// mouse. The tilt sensor needs HTTPS, so see example/README.md for running
+// The phone half of the marble demo: open #marble on a laptop and scan its QR
+// code, which opens #tilt on the phone. The phone sends its tilt, exactly the
+// way the cursors demo sends the mouse. However the phone is held when the
+// sensor starts counts as level, and "Set level" takes the current tilt as
+// level again. The tilt sensor needs HTTPS, so see example/README.md for running
 // this with a real phone. Without a sensor, arrow keys or dragging the pad
 // set the tilt instead.
 import { useEffect, useRef, useState } from "react";
@@ -25,6 +27,12 @@ type OrientationWithPermission = {
 
 const clampTilt = (degrees: number) =>
   Math.round(Math.min(Math.max(degrees, -MAX_TILT), MAX_TILT) * 10) / 10;
+// Beta goes from -180 to 180, so take the short way round.
+const wrap = (degrees: number) => ((((degrees + 180) % 360) + 360) % 360) - 180;
+// A laptop or desktop, which has no tilt sensor: it has a mouse, not a finger.
+const looksLikeLaptop = () =>
+  typeof DeviceOrientationEvent === "undefined" ||
+  !matchMedia("(pointer: coarse)").matches;
 
 export default function TiltController() {
   const me = useAnonymousId();
@@ -33,6 +41,7 @@ export default function TiltController() {
   const [sensor, setSensor] = useState<"off" | "on" | "denied" | "missing">(
     "off",
   );
+  const [laptop] = useState(looksLikeLaptop);
 
   const { writesPerSecond, countWrite } = useWritesPerSecond();
   const send = useSender(api.tilt.append, {
@@ -45,6 +54,15 @@ export default function TiltController() {
     const sample = { beta: clampTilt(next.beta), gamma: clampTilt(next.gamma) };
     setTilt(sample);
     send({ ...sample, flushMs });
+  };
+
+  // The phone's last reading, and the reading that counts as level: null
+  // until the first reading, which then becomes level.
+  const raw = useRef<Tilt | null>(null);
+  const level = useRef<Tilt | null>(null);
+  const setLevel = () => {
+    level.current = raw.current;
+    update({ beta: 0, gamma: 0 });
   };
 
   const startSensor = async () => {
@@ -60,19 +78,34 @@ export default function TiltController() {
         return;
       }
     }
+    raw.current = level.current = null;
     setSensor("on");
   };
 
-  // Phone: beta tilts front to back, gamma left to right.
+  // Phone: beta tilts front to back, gamma left to right, relative to level.
   useEffect(() => {
     if (sensor !== "on") return;
     const onOrientation = (e: DeviceOrientationEvent) => {
       if (e.beta === null || e.gamma === null) return; // no sensor here
-      update({ beta: e.beta, gamma: e.gamma });
+      raw.current = { beta: e.beta, gamma: e.gamma };
+      level.current ??= raw.current;
+      update({
+        beta: wrap(e.beta - level.current.beta),
+        gamma: e.gamma - level.current.gamma,
+      });
     };
     window.addEventListener("deviceorientation", onOrientation);
     return () => window.removeEventListener("deviceorientation", onOrientation);
   });
+  // No reading in a second (a laptop sends none, or only nulls): there's no
+  // sensor here.
+  useEffect(() => {
+    if (sensor !== "on") return;
+    const timeout = setTimeout(() => {
+      if (raw.current === null) setSensor("missing");
+    }, 1000);
+    return () => clearTimeout(timeout);
+  }, [sensor]);
 
   // Desktop: arrow keys tilt it KEY_TILT degrees while they're held.
   const heldKeys = useRef(new Set<string>());
@@ -139,7 +172,14 @@ export default function TiltController() {
         </p>
       </div>
       {sensor === "on" ? (
-        <p className="phone-tilt-status">Tilt the phone to roll the marble.</p>
+        <>
+          <p className="phone-tilt-status">
+            Tilt the phone to roll the marble.
+          </p>
+          <button className="phone-tilt-level" onClick={setLevel}>
+            Set level
+          </button>
+        </>
       ) : (
         <button className="phone-tilt-start" onClick={() => void startSensor()}>
           Use the tilt sensor
@@ -148,9 +188,12 @@ export default function TiltController() {
       {sensor === "denied" && (
         <p className="phone-tilt-status">Motion access was refused.</p>
       )}
-      {sensor === "missing" && (
-        <p className="phone-tilt-status">
-          No tilt sensor here: use the arrow keys.
+      {(laptop || sensor === "missing") && (
+        <p className="phone-tilt-status phone-tilt-laptop">
+          This is the phone half of the marble demo. Open the{" "}
+          <a href="#marble">Marble page</a> and scan its QR code with your
+          phone. No tilt sensor here, so the arrow keys and dragging the pad
+          tilt it instead.
         </p>
       )}
       <div className={`phone-tilt-flush${flushMs === 50 ? " fast" : ""}`}>

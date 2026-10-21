@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import QRCode from "qrcode";
 import { usePlayback } from "@convex-dev/batched-replay/react";
 import { api } from "../convex/_generated/api";
 import { TILT_ROOM } from "./Tilt";
@@ -111,6 +112,32 @@ const LAYOUT = {
   holeRadius: HOLE_RADIUS,
 };
 
+// The QR code as an SVG, one square per module, with the quiet zone round it.
+function QrCode({ text }: { text: string }) {
+  const { size, path } = useMemo(() => {
+    const { modules } = QRCode.create(text, { errorCorrectionLevel: "M" });
+    let path = "";
+    for (let r = 0; r < modules.size; r++) {
+      for (let c = 0; c < modules.size; c++) {
+        if (modules.get(r, c)) path += `M${c + 4} ${r + 4}h1v1h-1z`;
+      }
+    }
+    return { size: modules.size + 8, path };
+  }, [text]);
+  return (
+    <svg
+      className="marble-qr"
+      viewBox={`0 0 ${size} ${size}`}
+      shapeRendering="crispEdges"
+      role="img"
+      aria-label={`QR code for ${text}`}
+    >
+      <rect width={size} height={size} fill="#fff" />
+      <path d={path} fill="#0a0d16" />
+    </svg>
+  );
+}
+
 export default function Marble() {
   // Follow whichever phone sent the newest sample.
   const [leader] = useState({ stream: "", time: 0 });
@@ -185,17 +212,28 @@ export default function Marble() {
   }, []);
 
   const phoneUrl = `${location.origin}${location.pathname}#tilt`;
+  const [showQr, setShowQr] = useState(false);
   return (
     <>
       <MarbleBoard layout={LAYOUT} view={view} />
       <div className="hud marble-hud">
         <h1>Batched replay: tilt marble</h1>
-        <div className="marble-phone">
-          On your phone, open <strong>{phoneUrl}</strong>
-        </div>
-        {location.protocol !== "https:" && (
-          <div className="marble-note">
-            The phone's tilt sensor needs HTTPS: see example/README.md
+        {tilt && !showQr ? (
+          <div className="marble-connected">
+            Phone connected
+            <button onClick={() => setShowQr(true)}>Show QR code</button>
+          </div>
+        ) : (
+          <div className="marble-phone">
+            <strong>Control this from your phone</strong>
+            <QrCode text={phoneUrl} />
+            <span className="marble-phone-url">{phoneUrl}</span>
+            {location.protocol !== "https:" && (
+              <span className="marble-note">
+                The phone's tilt sensor needs HTTPS: see example/README.md
+              </span>
+            )}
+            {tilt && <button onClick={() => setShowQr(false)}>Hide</button>}
           </div>
         )}
         <div className="marble-tilt">

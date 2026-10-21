@@ -1,8 +1,10 @@
 # Example app
 
 Demos of `@convex-dev/batched-replay`, switched by `#cursors`, `#drawing`,
-`#racer`, `#marble` and `#tilt` in the URL. Each is the same component with its
-own `exposeApi` and `value`: the only real difference is what it sends.
+`#racer` and `#marble` in the URL (the menu at the top right), plus `#tilt`, the
+phone half of the marble, which is opened from its QR code and has no menu. Each
+is the same component with its own `exposeApi` and `value`: the only real
+difference is what it sends.
 
 - **Cursors** (`src/Cursors.tsx`, `convex/cursors.ts`): open it in two tabs and
   move the mouse. A slider sets the sender's `flushMs`.
@@ -19,7 +21,12 @@ own `exposeApi` and `value`: the only real difference is what it sends.
   line.
 - **Tilt marble** (`src/Marble.tsx` on a laptop, `src/Tilt.tsx` on a phone,
   `convex/tilt.ts`): the phone sends its tilt, and the laptop plays it back and
-  rolls a marble round a maze with it. The phone switches between 250 ms and 50
+  rolls a marble round a maze with it. The marble page shows "Control this from
+  your phone" with a QR code of its own URL ending `#tilt`, so a phone always
+  pairs with the deployment you're looking at; once a phone is sending, it
+  shrinks to "Phone connected". However the phone is held when the sensor starts
+  counts as level (people hold a phone tilted towards them), and "Set level"
+  makes the current tilt level again. The phone switches between 250 ms and 50
   ms flushes, to feel the difference while steering.
 
 ## Hosted demo
@@ -125,9 +132,11 @@ to Convex over `wss://`, so a local `ws://` backend from
   `@vitejs/plugin-basic-ssl` and accepting the warning), opened on the laptop's
   LAN address with `vite --host`.
 
-Then open `#marble` on the laptop and the URL it shows, ending `#tilt`, on the
-phone. Without a sensor (on a laptop, or under Playwright), the tilt page takes
-arrow keys or dragging on the round pad instead.
+Then open `#marble` on the laptop and scan its QR code with the phone (the URL,
+ending `#tilt`, is under it too, to type in). Tap "Use the tilt sensor" holding
+the phone however is comfortable: that's level, and "Set level" re-zeroes it.
+Without a sensor (on a laptop, or under Playwright), the tilt page says it's the
+phone half, and takes arrow keys or dragging on the round pad instead.
 
 Run it from the root of the repo:
 
