@@ -54,6 +54,7 @@ type Race = {
   car: Car;
   lapStartedAt: number | null; // null on the out lap, before the first line
   halfway: boolean; // been round the far side since the last line
+  lastSent?: Sample; // so a car sitting still sends nothing
 };
 
 const START: Car = { x: LINE_X - 200, y: TOP_Y, angle: 0, speed: 0 };
@@ -245,7 +246,19 @@ export default function Racer() {
         state.halfway = false;
         setLapId(Date.now()); // the next lap gets its own stream
       } else {
-        send(toSample(car, color));
+        // Like the cursors, a car sitting still sends nothing: only send when
+        // the rounded sample changes.
+        const sample = toSample(car, color);
+        const sent = state.lastSent;
+        if (
+          !sent ||
+          sample.x !== sent.x ||
+          sample.y !== sent.y ||
+          sample.angle !== sent.angle
+        ) {
+          send(sample);
+          state.lastSent = sample;
+        }
       }
 
       const lapMs =
