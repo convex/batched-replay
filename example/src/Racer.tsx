@@ -22,6 +22,7 @@ import {
 } from "./racerTrack";
 import { CAMERAS, type CameraName } from "./racer3d";
 import RacerScene from "./RacerScene";
+import UsageStats from "./UsageStats";
 import "./Racer.css";
 
 const ROOM = "racer-demo";
@@ -293,6 +294,7 @@ export default function Racer() {
         </div>
         <div>{ghost ? "Racing your best lap's ghost" : "No ghost yet"}</div>
         <div>Playing {Math.round(stats.delayMs)} ms behind</div>
+        <UsageStats />
         <div className="racer-cameras" role="group" aria-label="Camera">
           {Object.entries(CAMERAS).map(([name, label]) => (
             <button

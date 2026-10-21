@@ -3,6 +3,7 @@ import { usePlayback, useSender } from "@convex-dev/batched-replay/react";
 import { api } from "../convex/_generated/api";
 import { useAnonymousId } from "./anonymous";
 import { useWritesPerSecond } from "./useWritesPerSecond";
+import UsageStats from "./UsageStats";
 import CursorsScene from "./CursorsScene";
 
 const ROOM = "cursors-demo";
@@ -62,6 +63,7 @@ export default function Cursors() {
           {(writesPerSecond * 60).toLocaleString()} a minute)
         </div>
         <div>You receive {stats.batchesPerSecond.toFixed(1)} batches/s</div>
+        <UsageStats />
         <div>
           {(Object.keys(MODES) as Mode[]).map((m) => (
             <button

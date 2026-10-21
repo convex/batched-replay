@@ -11,6 +11,7 @@ import { useSender } from "@convex-dev/batched-replay/react";
 import { api } from "../convex/_generated/api";
 import { colorFor, useAnonymousId } from "./anonymous";
 import { useWritesPerSecond } from "./useWritesPerSecond";
+import { useUsage } from "./usage";
 import TiltPreview from "./TiltPreview";
 
 export const TILT_ROOM = "tilt-demo";
@@ -44,6 +45,7 @@ export default function TiltController() {
   const [laptop] = useState(looksLikeLaptop);
 
   const { writesPerSecond, countWrite } = useWritesPerSecond();
+  const usage = useUsage();
   const send = useSender(api.tilt.append, {
     room: TILT_ROOM,
     stream: me,
@@ -212,6 +214,9 @@ export default function TiltController() {
         <span>
           Flushing every {flushMs} ms: up to {1000 / flushMs} writes a second
           while tilting
+        </span>
+        <span>
+          {usage.calls.toLocaleString()} function calls from this tab so far
         </span>
       </div>
     </div>

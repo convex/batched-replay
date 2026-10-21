@@ -9,6 +9,7 @@ import {
 import { api } from "../convex/_generated/api";
 import { colorFor, useAnonymousId } from "./anonymous";
 import { useWritesPerSecond } from "./useWritesPerSecond";
+import UsageStats from "./UsageStats";
 import DrawingScene from "./DrawingScene";
 
 const ROOM = "drawing-demo";
@@ -194,6 +195,7 @@ export default function Drawing() {
         <div>You send {writesPerSecond} writes/s</div>
         <div>You receive {stats.batchesPerSecond.toFixed(1)} batches/s</div>
         <div>Playing {Math.round(stats.delayMs)} ms behind</div>
+        <UsageStats />
         <div>
           <button
             onClick={timelapse.playing ? timelapse.pause : startTimelapse}

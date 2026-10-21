@@ -4,6 +4,7 @@ import { usePlayback } from "@convex-dev/batched-replay/react";
 import { api } from "../convex/_generated/api";
 import { TILT_ROOM } from "./Tilt";
 import MarbleBoard from "./MarbleBoard";
+import UsageStats from "./UsageStats";
 import type { MarbleView } from "./MarbleBoard";
 
 // The maze: # is a wall, O a hole, S the start and G the goal. Each cell is
@@ -247,6 +248,7 @@ export default function Marble() {
         <div className="marble-delay">
           Playing {Math.round(stats.delayMs)} ms behind
         </div>
+        <UsageStats className="marble-usage" />
         <div className="marble-run">
           Time {(run.ms / 1000).toFixed(1)} s, best{" "}
           {run.best === null ? "-" : `${(run.best / 1000).toFixed(1)} s`},{" "}

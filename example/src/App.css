@@ -234,3 +234,12 @@
 .tilt-reading {
   font-variant-numeric: tabular-nums;
 }
+.hud .usage-info {
+  margin-left: 2px;
+  color: inherit;
+  opacity: 0.7;
+  text-decoration: none;
+}
+.hud .usage-info:hover {
+  opacity: 1;
+}
