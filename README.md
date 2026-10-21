@@ -9,7 +9,7 @@ little behind, and costs a handful of writes a second instead of 60. Batches are
 kept, so a whole session can be replayed later.
 
 **Live demo:**
-[https://striped-cow-628.convex.site](https://striped-cow-628.convex.site)
+[https://helpful-wren-102.ap-southeast-2.convex.site](https://helpful-wren-102.ap-southeast-2.convex.site)
 (cursors, a shared drawing board, a ghost racer and a phone-tilt marble).
 
 Found a bug? Feature request?
@@ -22,8 +22,8 @@ Found a bug? Feature request?
 The example's drawing board in two tabs, from about 4 writes a second.
 
 **Live demo:**
-[https://striped-cow-628.convex.site](https://striped-cow-628.convex.site). Open
-it in two tabs, or open `#marble` on a laptop and steer it with your phone.
+[https://helpful-wren-102.ap-southeast-2.convex.site](https://helpful-wren-102.ap-southeast-2.convex.site).
+Open it in two tabs, or open `#marble` on a laptop and steer it with your phone.
 
 ## Install
 
