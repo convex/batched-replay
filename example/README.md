@@ -24,7 +24,8 @@ own `exposeApi` and `value`: the only real difference is what it sends.
 
 ## Hosted demo
 
-The same app runs as a public demo at [https://DEMO_URL](https://DEMO_URL),
+The same app runs as a public demo at
+[https://striped-cow-628.convex.site](https://striped-cow-628.convex.site),
 served from its own Convex deployment by the
 [static hosting component](https://www.npmjs.com/package/@convex-dev/static-hosting)
 (mounted in `convex/convex.config.ts`). It's HTTPS, so the phone half of the
@@ -36,13 +37,16 @@ To deploy it, from the root of the repo:
 npm run deploy:demo
 ```
 
-That builds the component (`dist`, which the example imports), then
-`npx @convex-dev/static-hosting deploy` deploys the backend, builds the page
-with `npm run build:demo` and the production `VITE_CONVEX_URL`, and uploads
+That builds the component (`dist`, which the example imports), deploys the
+backend with `npx convex deploy -y`, then
+`npx @convex-dev/static-hosting deploy --skip-convex` builds the page with
+`npm run build:demo` and the production `VITE_CONVEX_URL`, and uploads
 `example/dist`. It deploys to the production deployment of whichever project the
-CLI points at, so either run it logged in (`npx convex login`) with
-`CONVEX_DEPLOYMENT` set to the demo project, or set `CONVEX_DEPLOY_KEY` to a
-production deploy key for that project.
+CLI points at, so either run it from a checkout whose `.env.local` points at the
+demo project (`batched-replay-demo` in the Convex DevX team, `cvx-devx`), or set
+`CONVEX_DEPLOY_KEY` to a production deploy key for that project. Your everyday
+checkout points at a local deployment, so a separate worktree for deploying
+keeps the two apart.
 
 Anyone can open it and there's no sign-in, so it has some limits:
 
