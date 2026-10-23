@@ -6,46 +6,6 @@ Releases are published to npm by GitHub Actions when a version tag is pushed
 no npm token stored anywhere, and npm adds a provenance statement linking each
 version to the commit and workflow run that built it (for a public repo).
 
-## One-time setup
-
-npm only lets you set up Trusted Publishing on a package that already exists, so
-the very first version is published by hand.
-
-1. Make the GitHub repo public (provenance and the components directory both
-   need it).
-2. Publish 0.1.0 from a clean checkout of `main`, as someone with publish rights
-   on the `@convex-dev` npm scope:
-
-   ```sh
-   npm login
-   npm ci
-   npm publish --access public
-   ```
-
-   `prepublishOnly` makes a clean build first. Don't use `npm run release` for
-   this one: it bumps the version first, so it would publish 0.1.1.
-
-3. Tag it, so the repo records what was published:
-
-   ```sh
-   git tag v0.1.0
-   git push origin v0.1.0
-   ```
-
-   The publish workflow runs, sees 0.1.0 is already on npm, and stops without
-   publishing.
-
-4. On npmjs.com, open `@convex-dev/batched-replay`, go to **Settings**, and
-   under **Trusted Publisher** choose **GitHub Actions** with:
-   - Organization or user: `convex`
-   - Repository: `batched-replay`
-   - Workflow filename: `publish.yml`
-   - Environment: leave blank
-
-5. Optional but recommended: in the same settings, under **Publishing access**,
-   choose "Require two-factor authentication and disallow tokens", so only the
-   workflow (or a person with 2FA) can publish.
-
 ## Releasing a new version
 
 From an up-to-date `main`:
