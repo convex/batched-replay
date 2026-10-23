@@ -31,10 +31,6 @@ jobs:
           node-version: "24.x"
           registry-url: "https://registry.npmjs.org"
 
-      # Trusted Publishing needs npm 11.5.1 or later.
-      - name: Update npm
-        run: npm install -g npm@^11.5.1
-
       - name: Check the tag and whether this version is already out
         id: version
         env:
@@ -70,4 +66,4 @@ jobs:
         if: steps.version.outputs.publish == 'true'
         env:
           DIST_TAG: ${{ steps.version.outputs.dist_tag }}
-        run: npm publish --access public --tag "$DIST_TAG"
+        run: npm stage publish --access public --tag "$DIST_TAG"
