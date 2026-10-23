@@ -6,6 +6,10 @@ Releases are published to npm by GitHub Actions when a version tag is pushed
 no npm token stored anywhere, and npm adds a provenance statement linking each
 version to the commit and workflow run that built it (for a public repo).
 
+**Note**: It publishes as "staged" and requires someone to approve it at
+https://www.npmjs.com/settings/<username>/staged-packages or via
+`npm stage list` / `npm stage approve <id>`
+
 ## Releasing a new version
 
 From an up-to-date `main`:
