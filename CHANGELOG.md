@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.1
+
+- Setting up trusted publishing
+
 ## 0.1.0
 
 First release. Senders batch fast-changing values (cursors, pen strokes, game
