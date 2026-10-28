@@ -12,7 +12,7 @@ Prior art to credit and learn from, not copy:
 
 - AI Town's `HistoricalObject` and engine playback (server-side game loop, one
   write a second).
-- https://github.com/get-convex/multiplayer-cursors (Sujay and Ian, 2024):
+- https://github.com/convex/multiplayer-cursors (Sujay and Ian, 2024):
   server timestamps, adaptive playback clock.
 - https://github.com/Iann29/convex-multiplayer-cursors: a cursors-only component
   (x, y only).
